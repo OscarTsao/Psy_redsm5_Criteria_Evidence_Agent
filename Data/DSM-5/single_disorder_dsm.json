@@ -1,0 +1,29 @@
+    [{
+        "id": "A",
+        "text": "Severe recurrent temper outbursts manifested verbally (e.g., verbal rages) and/or behaviorally (e.g., physical aggression toward people or property) that are grossly out of proportion in intensity or duration to the situation or provocation."
+      },
+      {
+        "id": "B",
+        "text": "The temper outbursts are inconsistent with developmental level."
+      },
+      {
+        "id": "D",
+        "text": "The mood between temper outbursts is persistently irritable or angry most of the day, nearly every day, and is observable by others (e.g., parents, teachers, peers)."
+      },
+      {
+        "id": "G",
+        "text": "The diagnosis should not be made for the first time before age 6 years or after age 18 years."
+      },
+      {
+        "id": "I",
+        "text": "There has never been a distinct period lasting more than 1 day during which the full symptom criteria, except duration, for a manic or hypomanic episode have been met. Note: Developmentally appropriate mood elevation, such as occurs in the context of a highly positive event or its anticipation, should not be considered as a symptom of mania or hypomania."
+      },
+      {
+        "id": "J",
+        "text": "The behaviors do not occur exclusively during an episode of major depressive disorder and are not better explained by another mental disorder (e.g., autism spectrum disorder, posttraumatic stress disorder, separation anxiety disorder, persistent depressive disorder [dysthymia])."
+      },
+      {
+        "id": "K",
+        "text": "The symptoms are not attributable to the physiological effects of a substance or to another medical or neurological condition."
+      }
+    ]

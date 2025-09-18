@@ -1,0 +1,601 @@
+[
+  {
+    "diagnosis": "Disruptive Mood Dysregulation Disorder",
+    "criteria": [
+      {
+        "id": "A",
+        "text": "Severe recurrent temper outbursts manifested verbally (e.g., verbal rages) and/or behaviorally (e.g., physical aggression toward people or property) that are grossly out of proportion in intensity or duration to the situation or provocation."
+      },
+      {
+        "id": "B",
+        "text": "The temper outbursts are inconsistent with developmental level."
+      },
+      {
+        "id": "D",
+        "text": "The mood between temper outbursts is persistently irritable or angry most of the day, nearly every day, and is observable by others (e.g., parents, teachers, peers)."
+      },
+      {
+        "id": "G",
+        "text": "The diagnosis should not be made for the first time before age 6 years or after age 18 years."
+      },
+      {
+        "id": "I",
+        "text": "There has never been a distinct period lasting more than 1 day during which the full symptom criteria, except duration, for a manic or hypomanic episode have been met. Note: Developmentally appropriate mood elevation, such as occurs in the context of a highly positive event or its anticipation, should not be considered as a symptom of mania or hypomania."
+      },
+      {
+        "id": "J",
+        "text": "The behaviors do not occur exclusively during an episode of major depressive disorder and are not better explained by another mental disorder (e.g., autism spectrum disorder, posttraumatic stress disorder, separation anxiety disorder, persistent depressive disorder [dysthymia])."
+      },
+      {
+        "id": "K",
+        "text": "The symptoms are not attributable to the physiological effects of a substance or to another medical or neurological condition."
+      }
+    ]
+  },
+  {
+    "diagnosis": "Major Depressive Disorder",
+    "criteria": [
+      {
+        "id": "A.1",
+        "text": "Depressed mood most of the day, nearly every day, as indicated by either subjective report (e.g., feels sad, empty, hopeless) or observation made by others (e.g.,appears tearful). (Note: In children and adolescents, can be irritable mood.)"
+      },
+      {
+        "id": "A.2",
+        "text": "Markedly diminished interest or pleasure in all, or almost all, activities most of the day, nearly every day (as indicated by either subjective account or observation)."
+      },
+      {
+        "id": "A.3",
+        "text": "Significant weight loss when not dieting or weight gain (e.g., a change of more than 5% of body weight in a month), or decrease or increase in appetite nearly every day. (Note: In children, consider failure to make expected weight gains.)"
+      },
+      {
+        "id": "A.4",
+        "text": "Insomnia or hypersomnia nearly every day."
+      },
+      {
+        "id": "A.5",
+        "text": "Psychomotor agitation or retardation nearly every day (observable by others; not merely subjective feelings of restlessness or being slowed down)."
+      },
+      {
+        "id": "A.6",
+        "text": "Fatigue or loss of energy nearly every day."
+      },
+      {
+        "id": "A.7",
+        "text": "Feelings of worthlessness or excessive or inappropriate guilt (which may be delusional) nearly every day (not merely self-reproach or guilt about being sick)."
+      },
+      {
+        "id": "A.8",
+        "text": "Diminished ability to think or concentrate, or indecisiveness, nearly every day (either by subjective account or as observed by others)."
+      },
+      {
+        "id": "A.9",
+        "text": "Recurrent thoughts of death (not just fear of dying), recurrent suicidal ideation without a specific plan, or a suicide attempt or a specific plan for committing suicide."
+      },
+      {
+        "id": "B",
+        "text": "The symptoms cause clinically significant distress or impairment in social, occupational, or other important areas of functioning."
+      },
+      {
+        "id": "C",
+        "text": "The episode is not attributable to the physiological effects of a substance or to another medical condition. Note: Responses to a significant loss (e.g., bereavement, financial ruin, losses from a natural disaster, a serious medical illness or disability) may include the feelings of intense sadness, rumination about the loss, insomnia, poor appetite, and weight loss."
+      },
+      {
+        "id": "D",
+        "text": "The occurrence of the major depressive episode is not better explained by schizoaffective disorder, schizophrenia, schizophreniform disorder, delusional disorder, or other specified and unspecified schizophrenia spectrum and other psychotic disorders. There has never been a manic episode or a hypomanic episode. Note: This exclusion does not apply if all of the manic-like or hypomanic-like episodes are substance-induced or are attributable to the physiological effects of another medical condition."
+      },
+      {
+        "id": "E",
+        "text": "There has never been a manic episode or a hypomanic episode. Note: This exclusion does not apply if all of the manic-like or hypomanic-like episodes are substance-induced or are attributable to the physiological effects of another medical condition."
+      }
+    ]
+  },
+  {
+    "diagnosis": "Persistent Depressive Disorder (Dysthymia)",
+    "criteria": [
+      {
+        "id": "A",
+        "text": "Depressed mood for most of the day, for more days than not, as indicated by either subjective account or observation by others, for at least 2 years. Note: In children and adolescents, mood can be irritable and duration must be at least 1 year."
+      },
+      {
+        "id": "B.1",
+        "text": "Poor appetite or overeating."
+      },
+      {
+        "id": "B.2",
+        "text": "Insomnia or hypersomnia."
+      },
+      {
+        "id": "B.3",
+        "text": "Low energy or fatigue."
+      },
+      {
+        "id": "B.4",
+        "text": "Low self-esteem."
+      },
+      {
+        "id": "B.5",
+        "text": "Poor concentration or difficulty making decisions."
+      },
+      {
+        "id": "B.6",
+        "text": "Feelings of hopelessness."
+      },
+      {
+        "id": "E",
+        "text": "There has never been a manic episode or a hypomanic episode, and criteria have never been met for cyclothymic disorder."
+      },
+      {
+        "id": "F",
+        "text": "The disturbance is not better explained by a persistent schizoaffective disorder, schizophrenia, delusional disorder, or other specified or unspecified schizophrenia spectrum and other psychotic disorder."
+      },
+      {
+        "id": "G",
+        "text": "The symptoms are not attributable to the physiological effects of a substance (e.g., a drug of abuse, a medication) or another medical condition (e.g. hypothyroidism)."
+      },
+      {
+        "id": "H",
+        "text": "The symptoms cause clinically significant distress or impairment in social, occupational, or other important areas of functioning. Patients may experience difficulties in their relationships, work performance, and overall quality of life.\n\nPremenstrual Dysphoric Disorder\nDiagnostic Criteria 625.4 (N94.3)"
+      }
+    ]
+  },
+  {
+    "diagnosis": "Premenstrual Dysphoric Disorder",
+    "criteria": [
+      {
+        "id": "A",
+        "text": "In the majority of menstrual cycles, at least five symptoms must be present in the final week before the onset of menses, start to improve within a few days after the onset of menses, and become minimal or absent in the week postmenses."
+      },
+      {
+        "id": "B.1",
+        "text": "Marked affective lability (e.g., mood swings; feeling suddenly sad or tearful, or increased sensitivity to rejection)."
+      },
+      {
+        "id": "B.2",
+        "text": "Marked irritability or anger or increased interpersonal conflicts."
+      },
+      {
+        "id": "B.3",
+        "text": "Marked depressed mood, feelings of hopelessness, or self-deprecating thoughts."
+      },
+      {
+        "id": "B.4",
+        "text": "Marked anxiety, tension, and/or feelings of being keyed up or on edge."
+      },
+      {
+        "id": "C.1",
+        "text": "Depressed interest in usual activities (e.g., work, school, friends, hobbies)."
+      },
+      {
+        "id": "C.2",
+        "text": "Subjective difficulty in concentration."
+      },
+      {
+        "id": "C.3",
+        "text": "Lethargy, easy fatigability, or marked lack of energy."
+      },
+      {
+        "id": "C.4",
+        "text": "Marked change in appetite; overeating; or specific food cravings."
+      },
+      {
+        "id": "C.5",
+        "text": "Hypersomnia or insomnia."
+      },
+      {
+        "id": "C.6",
+        "text": "A sense of being overwhelmed or out of control."
+      },
+      {
+        "id": "C.7",
+        "text": "Physical symptoms such as breast tenderness or swelling, joint or muscle pain, a sensation of “bloating,” or weight gain."
+      },
+      {
+        "id": "D",
+        "text": "The symptoms are associated with clinically significant distress or interference with work, school, usual social activities, or relationships with others (e.g., avoidance of social activities; decreased productivity and efficiency at work, school, or home)."
+      },
+      {
+        "id": "E",
+        "text": "The disturbance is not merely an exacerbation of the symptoms of another disorder, such as major depressive disorder, panic disorder, persistent depressive disorder (dysthymia), or a personality disorder (although it may co-occur with any of these disorders)."
+      },
+      {
+        "id": "G",
+        "text": "The symptoms are not attributable to the physiological effects of a substance (e.g., a drug of abuse, a medication, other treatment) or another medical condition (e.g., hy-perthyroidism)."
+      }
+    ]
+  },
+  {
+    "diagnosis": "Substance/Medication-Induced Depressive Disorder",
+    "criteria": [
+      {
+        "id": "A",
+        "text": "A prominent and persistent disturbance in mood that predominates in the clinical picture and is characterized by depressed mood or markedly diminished interest or pleasure in all, or almost all, activities."
+      },
+      {
+        "id": "B.1",
+        "text": "The symptoms in Criterion A developed during or soon after substance intoxication or withdrawal or after exposure to a medication.."
+      },
+      {
+        "id": "B.2",
+        "text": "The involved substance/medication is capable of producing the symptoms in Criterion A."
+      },
+      {
+        "id": "C",
+        "text": "The disturbance is not better explained by a depressive disorder that is not substance/ medication-induced. Such evidence of an independent depressive disorder could include the following: The symptoms preceded the onset of the substance/medication use; the symptoms persist for a substantial period of time (e.g., about 1 month after the cessation of acute withdrawal or severe intoxication; or there is other evidence suggesting the existence of an independent non-substance/medication-induced depressive disorder (e.g., a history of recurrent non-substance/medication-related episodes)."
+      },
+      {
+        "id": "D",
+        "text": "The disturbance does not occur exclusively during the course of a delirium."
+      },
+      {
+        "id": "E",
+        "text": "The disturbance causes clinically significant distress or impairment in social, occupational, or other important areas of functioning."
+      }
+    ]
+  },
+  {
+    "diagnosis": "Depressive Disorder Due to Another Medical Condition",
+    "criteria": [
+      {
+        "id": "A",
+        "text": "A prominent and persistent period of depressed mood or markedly diminished interest or pleasure in all, or almost all, activities that predominates in the clinical picture."
+      },
+      {
+        "id": "B",
+        "text": "There is evidence from the history, physical examination, or laboratory findings that the disturbance is the direct pathophysiological consequence of another medical condition."
+      },
+      {
+        "id": "C",
+        "text": "The disturbance is not better explained by another mental disorder(e.g.., adjustment disorder with depressed mood, in which the stressor is a serious medical condition)."
+      },
+      {
+        "id": "D",
+        "text": "The disturbance does not occur exclusively during the course of a delirium."
+      },
+      {
+        "id": "E",
+        "text": "The disturbance causes clinically significant distress or impairment in social, occupational, or other important areas of functioning."
+      }
+    ]
+  },
+  {
+    "diagnosis": "Separation Anxiety Disorder",
+    "criteria": [
+      {
+        "id": "A.1",
+        "text": "Recurrent excessive distress when anticipating or experiencing separation from home or from major attachment figures."
+      },
+      {
+        "id": "A.2",
+        "text": "Persistent and excessive worry about losing major attachment figures or about possible harm to them, such as illness, injury, disasters, or death."
+      },
+      {
+        "id": "A.3",
+        "text": "Persistent and excessive worry about experiencing an untoward event (e.g., getting lost, being kidnapped, having an accident, becoming ill) that causes separation from a major attachment figure."
+      },
+      {
+        "id": "A.4",
+        "text": "Persistent reluctance or refusal to go out, away from home, to school, to work, or elsewhere because of fear of separation."
+      },
+      {
+        "id": "A.5",
+        "text": "Persistent and excessive fear of or reluctance about being alone or without major attachment figures at home or in other settings."
+      },
+      {
+        "id": "A.6",
+        "text": "Persistent reluctance or refusal to sleep away from home or to go to sleep without being near a major attachment figure."
+      },
+      {
+        "id": "A.7",
+        "text": "Repeated nightmares involving the theme of separation."
+      },
+      {
+        "id": "A.8",
+        "text": "Repeated complaints of physical symptoms (e.g., headaches, stomachaches, nausea, vomiting) when separation from major attachment figures occurs or is anticipated."
+      },
+      {
+        "id": "C",
+        "text": "The disturbance causes clinically significant distress or impairment in social, academic (occupational), or other important areas of functioning."
+      },
+      {
+        "id": "D",
+        "text": "The disturbance is not better explained by another mental disorder (e.g., refusing to leave home because of excessive resistance to change in autism spectrum disorder; delusions or hallucinations concerning separation in psychotic disorders; refusal to go outside without a trusted companion in agoraphobia; worries about ill health or other harm befalling significant others in generalized anxiety disorder; or concerns about having an illness in illness anxiety disorder)."
+      }
+    ]
+  },
+  {
+    "diagnosis": "Selective Mutism",
+    "criteria": [
+      {
+        "id": "A",
+        "text": "Consistent failure to speak in specific social situations (in which there is an expectation for speaking, e.g., at school) despite speaking in other situations."
+      },
+      {
+        "id": "B",
+        "text": "The disturbance interferes with educational or occupational achievement or with social communication."
+      },
+      {
+        "id": "D",
+        "text": "The failure to speak is not attributable to a lack of knowledge of, or comfort with, the spoken language required in the social situation."
+      },
+      {
+        "id": "E",
+        "text": "The disturbance is not better explained by a communication disorder (e.g., childhood-onset fluency disorder) and does not occur exclusively during the course of autism spectrum disorder, schizophrenia, or another psychotic disorder."
+      }
+    ]
+  },
+  {
+    "diagnosis": "Specific Phobia",
+    "criteria": [
+      {
+        "id": "A",
+        "text": "Marked fear or anxiety about a specific object or situation (e.g., flying, heights, animals, receiving an injection, seeing blood).   The fear or anxiety is out of proportion to the actual danger posed by the specific object or situation and to the sociocultural context. The fear, anxiety, or avoidance is persistent, typically lasting for 6 months or more. The fear, anxiety, or avoidance causes clinically significant distress or impairment in social, occupational, or other important areas of functioning."
+      },
+      {
+        "id": "B",
+        "text": "The phobic object or situation almost always provokes immediate fear or anxiety."
+      },
+      {
+        "id": "C",
+        "text": "The phobic object or situation is actively avoided or endured with intense fear or anxiety."
+      },
+      {
+        "id": "D",
+        "text": "The fear or anxiety is out of proportion to the actual danger posed by the specific object or situation and to the sociocultural context."
+      },
+      {
+        "id": "F",
+        "text": "The fear, anxiety, or avoidance causes clinically significant distress or impairment in social, occupational, or other important areas of functioning."
+      },
+      {
+        "id": "G",
+        "text": "The disturbance is not better explained by the symptoms of another mental disorder, including fear, anxiety, and avoidance of situations associated with panic-like symptoms or other incapacitating symptoms (as in agoraphobia); objects or situations related to obsessions (as in obsessive-compulsive disorder); reminders of traumatic events (as in posttraumatic stress disorder); separation from home or attachment figures (as in separation anxiety disorder); or social situations (as in social anxiety disorder [social phobia])."
+      }
+    ]
+  },
+  {
+    "diagnosis": "Social Anxiety Disorder (Social Phobia)",
+    "criteria": [
+      {
+        "id": "A",
+        "text": "Marked fear or anxiety about one or more social situations in which the individual is exposed to possible scrutiny by others. Examples include social interactions (e.g., having a conversation, meeting unfamiliar people), being observed (e.g., eating or drinking), and performing in front of others (e.g., giving a speech). Note: In children, the anxiety must occur in peer settings and not just during interactions with adults."
+      },
+      {
+        "id": "B",
+        "text": "The individual fears that he or she will act in a way or show anxiety symptoms that will be negatively evaluated (i.e., will be humiliating or embarrassing; will lead to rejection or offend others)."
+      },
+      {
+        "id": "C",
+        "text": "The social situations almost always provoke fear or anxiety. Note: In children, the fear or anxiety may be expressed by crying, tantrums, freezing, clinging, shrinking, or failing to speak in social situations."
+      },
+      {
+        "id": "D",
+        "text": "The social situations are avoided or endured with intense fear or anxiety."
+      },
+      {
+        "id": "E",
+        "text": "The fear or anxiety is out of proportion to the actual threat posed by the social situation and to the sociocultural context."
+      },
+      {
+        "id": "G",
+        "text": "The fear, anxiety, or avoidance causes clinically significant distress or impairment in social, occupational, or other important areas of functioning."
+      },
+      {
+        "id": "H",
+        "text": "The fear, anxiety, or avoidance is not attributable to the physiological effects of a substance (e.g., a drug of abuse, a medication) or another medical condition."
+      },
+      {
+        "id": "I",
+        "text": "The fear, anxiety, or avoidance is not better explained by the symptoms of another mental disorder, such as panic disorder, body dysmorphic disorder, or autism spectrum disorder."
+      },
+      {
+        "id": "J",
+        "text": "If another medical condition (e.g., Parkinson's disease, obesity, disfigurement from burns or injury) is present, the fear, anxiety, or avoidance is clearly unrelated or is excessive."
+      }
+    ]
+  },
+  {
+    "diagnosis": "Panic Disorder",
+    "criteria": [
+      {
+        "id": "A.1",
+        "text": "Palpitations, pounding heart, or accelerated heart rate."
+      },
+      {
+        "id": "A.2",
+        "text": "Sweating."
+      },
+      {
+        "id": "A.3",
+        "text": "Trembling or shaking."
+      },
+      {
+        "id": "A.4",
+        "text": "Sensations of shortness of breath or smothering."
+      },
+      {
+        "id": "A.5",
+        "text": "Feelings of choking."
+      },
+      {
+        "id": "A.6",
+        "text": "Chest pain or discomfort."
+      },
+      {
+        "id": "A.7",
+        "text": "Nausea or abdominal distress."
+      },
+      {
+        "id": "A.8",
+        "text": "Feeling dizzy, unsteady, light-headed, or faint."
+      },
+      {
+        "id": "A.9",
+        "text": "Chills or heat sensations."
+      },
+      {
+        "id": "A.10",
+        "text": "Paresthesias (numbness or tingling sensations)."
+      },
+      {
+        "id": "A.11",
+        "text": "Derealization (feelings of unreality) or depersonalization (being detached from oneself)."
+      },
+      {
+        "id": "A.12",
+        "text": "Fear of losing control or “going crazy.”"
+      },
+      {
+        "id": "A.13",
+        "text": "Fear of dying."
+      },
+      {
+        "id": "C",
+        "text": "The disturbance is not attributable to the physiological effects of a substance (e.g., a drug of abuse, a medication) or another medical condition (e.g., hyperthyroidism, cardiopulmonary disorders)."
+      },
+      {
+        "id": "D",
+        "text": "The disturbance is not better explained by another mental disorder(e.g., the panic attacks do not occur only in response to feared social situations, as in social anxiety disorder; in response to circumscribed phobic objects or situations, as in specific phobia; in response to obsessions, as in obsessive-compulsive disorder; in response to reminders of traumatic events, as in posttraumatic stress disorder; or in response to separation from attachment figures, as in separation anxiety disorder)."
+      }
+    ]
+  },
+  {
+    "diagnosis": "Agoraphobia",
+    "criteria": [
+      {
+        "id": "A.1",
+        "text": "Marked fear or anxiety about using public transportation (e.g., automobiles, buses, trains, ships, planes)."
+      },
+      {
+        "id": "A.2",
+        "text": "Marked fear or anxiety about being in open spaces (e.g., parking lots, marketplaces, bridges)."
+      },
+      {
+        "id": "A.3",
+        "text": "Marked fear or anxiety about being in enclosed places (e.g., shops, theaters, cinemas)."
+      },
+      {
+        "id": "A.4",
+        "text": "Marked fear or anxiety about standing in line or being in a crowd."
+      },
+      {
+        "id": "A.5",
+        "text": "Marked fear or anxiety about being outside of the home alone."
+      },
+      {
+        "id": "B",
+        "text": "The individual fears or avoids these situations because of thoughts that escape might be difficult or help might not be available in the event of developing panic-like symptoms or other incapacitating or embarrassing symptoms (e.g., fear of falling in the elderly; fear of incontinence)."
+      },
+      {
+        "id": "C",
+        "text": "The agoraphobic situations almost always provoke fear or anxiety."
+      },
+      {
+        "id": "D",
+        "text": "The agoraphobic situations are actively avoided, require the presence of a companion, or are endured with intense fear or anxiety."
+      },
+      {
+        "id": "E",
+        "text": "The fear or anxiety is out of proportion to the actual danger posed by the agoraphobic situations and to the sociocultural context."
+      },
+      {
+        "id": "G",
+        "text": "The fear, anxiety, or avoidance causes clinically significant distress or impairment in social, occupational, or other important areas of functioning."
+      },
+      {
+        "id": "H",
+        "text": "If another medical condition (e.g., inflammatory bowel disease, Parkinson's disease) is present, the fear, anxiety, or avoidance is clearly excessive."
+      },
+      {
+        "id": "I",
+        "text": "The fear, anxiety, or avoidance is not better explained by the symptoms of another mental disorder (e.g., the symptoms are not confined to specific phobia, situational type; do not involve only social situations [as in social anxiety disorder]; and are not related exclusively to obsessions [as in obsessive-compulsive disorder], perceived defects or flaws in physical appearance [as in body dysmorphic disorder], reminders of traumatic events [as in posttraumatic stress disorder], or fear of separation [as in separation anxiety disorder])."
+      }
+    ]
+  },
+  {
+    "diagnosis": "Generalized Anxiety Disorder",
+    "criteria": [
+      {
+        "id": "B",
+        "text": "The individual finds it difficult to control the worry."
+      },
+      {
+        "id": "C.1",
+        "text": "Restlessness or feeling keyed up or on edge."
+      },
+      {
+        "id": "C.2",
+        "text": "Being easily fatigued."
+      },
+      {
+        "id": "C.3",
+        "text": "Difficulty concentrating or mind going blank."
+      },
+      {
+        "id": "C.4",
+        "text": "Irritability."
+      },
+      {
+        "id": "C.5",
+        "text": "Muscle tension."
+      },
+      {
+        "id": "C.6",
+        "text": "Sleep disturbance (difficulty falling or staying asleep, or restless, unsatisfying sleep)."
+      },
+      {
+        "id": "D",
+        "text": "The anxiety, worry, or physical symptoms cause clinically significant distress or impairment in social, occupational, or other important areas of functioning."
+      },
+      {
+        "id": "E",
+        "text": "The disturbance is not attributable to the physiological effects of a substance (e.g., a drug of abuse, a medication) or another medical condition (e.g., hyperthyroidism)."
+      },
+      {
+        "id": "F",
+        "text": "The disturbance is not better explained by another mental disorder (e.g., anxiety or worry about having panic attacks in panic disorder, negative evaluation in social anxiety disorder [social phobia], contamination or other obsessions in obsessive-compulsive disorder, separation from attachment figures in separation anxiety disorder, reminders of traumatic events in posttraumatic stress disorder, gaining weight in anorexia nervosa, physical complaints in somatic symptom disorder, perceived appearance flaws in body dysmorphic disorder, having a serious illness in illness anxiety disorder, or the content of delusional beliefs in schizophrenia or delusional disorder)."
+      }
+    ]
+  },
+  {
+    "diagnosis": "Substance/Medication-Induced Anxiety Disorder",
+    "criteria": [
+      {
+        "id": "A",
+        "text": "Panic attacks or anxiety is predominant in the clinical picture."
+      },
+      {
+        "id": "D",
+        "text": "The disturbance does not occur exclusively during the course of a delirium."
+      },
+      {
+        "id": "E",
+        "text": "The disturbance causes clinically significant distress or impairment in social, occupational, or other important areas of functioning."
+      }
+    ]
+  },
+  {
+    "diagnosis": "Anxiety Disorder Due to Another Medical Condition",
+    "criteria": [
+      {
+        "id": "A",
+        "text": "Panic attacks or anxiety is predominant in the clinical picture."
+      },
+      {
+        "id": "B",
+        "text": "There is evidence from the history, physical examination, or laboratory findings that the disturbance is the direct pathophysiological consequence of another medical condition."
+      },
+      {
+        "id": "C",
+        "text": "The disturbance is not better explained by another mental disorder."
+      },
+      {
+        "id": "D",
+        "text": "The disturbance does not occur exclusively during the course of a delirium."
+      },
+      {
+        "id": "E",
+        "text": "The disturbance causes clinically significant distress or impairment in social, occupational, or other important areas of functioning."
+      }
+    ]
+  }
+]
