@@ -12,7 +12,7 @@ from datetime import datetime
 from sklearn.metrics import precision_recall_fscore_support, accuracy_score, hamming_loss, roc_auc_score
 
 from data_preprocessing import prepare_data, split_data, create_datasets, create_symptom_mapping
-from model import SpanBERTForDSM5Classification, FocalLoss, get_model
+from model import BERTForDSM5Classification, FocalLoss, get_model
 
 class Trainer:
     def __init__(self, model, device, train_loader, val_loader, optimizer, scheduler, criterion, config):
@@ -200,11 +200,11 @@ class Trainer:
         print(f"Model checkpoint saved with F1: {self.best_val_f1:.4f}")
 
 def main():
-    parser = argparse.ArgumentParser(description='Train SpanBERT for DSM-5 Criteria Classification')
+    parser = argparse.ArgumentParser(description='Train BERT for DSM-5 Criteria Classification')
     parser.add_argument('--posts_path', type=str, default='Data/redsm5/redsm5_posts.csv')
     parser.add_argument('--annotations_path', type=str, default='Data/redsm5/redsm5_annotations.csv')
     parser.add_argument('--criteria_path', type=str, default='Data/DSM-5/DSM_Criteria_Array_Fixed_Major_Depressive.json')
-    parser.add_argument('--model_name', type=str, default='SpanBERT/spanbert-base-cased')
+    parser.add_argument('--model_name', type=str, default='google-bert/bert-large-uncased-whole-word-masking-finetuned-squad')
     parser.add_argument('--batch_size', type=int, default=16)
     parser.add_argument('--num_epochs', type=int, default=20)
     parser.add_argument('--learning_rate', type=float, default=2e-5)

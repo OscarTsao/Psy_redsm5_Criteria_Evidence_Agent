@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a SpanBERT-based multi-label classification system for matching DSM-5 Major Depressive Disorder criteria to Reddit posts from the RedSM5 dataset. The system classifies text into 9 DSM-5 criteria (A.1 to A.9) for depression diagnosis.
+This is a BERT Large-based multi-label classification system for matching DSM-5 Major Depressive Disorder criteria to Reddit posts from the RedSM5 dataset. The system classifies text into 9 DSM-5 criteria (A.1 to A.9) for depression diagnosis.
 
 ## Essential Commands
 
@@ -52,7 +52,7 @@ python predict.py \
 ## Architecture Overview
 
 ### Core Components
-- **`model.py`**: SpanBERT model with classification head (2-layer MLP + dropout)
+- **`model.py`**: BERT Large model with classification head (2-layer MLP + dropout)
 - **`data_preprocessing.py`**: Data loading, preprocessing, and dataset creation utilities
 - **`train.py`**: Training pipeline with early stopping and checkpointing
 - **`predict.py`**: Inference and evaluation with detailed metrics
@@ -60,11 +60,11 @@ python predict.py \
 ### Data Flow
 1. Raw data (`redsm5_posts.csv`, `redsm5_annotations.csv`) → preprocessing
 2. DSM-5 criteria mapping from JSON → symptom labels
-3. Text tokenization (max_length=512) → SpanBERT embeddings
+3. Text tokenization (max_length=512) → BERT Large embeddings
 4. Multi-label classification → 9 criterion predictions
 
 ### Model Architecture
-- Base: SpanBERT (spanbert-base-cased)
+- Base: BERT Large (google-bert/bert-large-uncased-whole-word-masking-finetuned-squad)
 - Classification Head: Linear(768→256) → ReLU → Dropout → Linear(256→9)
 - Loss: Binary Cross-Entropy or Focal Loss (for class imbalance)
 - Output: Sigmoid probabilities for each DSM-5 criterion

@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 from data_preprocessing import prepare_data, split_data, create_datasets, create_symptom_mapping
-from model import SpanBERTForDSM5Classification
+from model import BERTForDSM5Classification
 
 def load_checkpoint(checkpoint_path, device):
     checkpoint = torch.load(checkpoint_path, map_location=device)
@@ -265,12 +265,12 @@ def print_metrics_summary(metrics):
     print(f"Multiple criteria can be predicted as present for a single post.")
 
 def main():
-    parser = argparse.ArgumentParser(description='Predict DSM-5 Criteria using trained SpanBERT model')
+    parser = argparse.ArgumentParser(description='Predict DSM-5 Criteria using trained BERT model')
     parser.add_argument('--checkpoint_path', type=str, required=True, help='Path to model checkpoint')
     parser.add_argument('--posts_path', type=str, default='Data/redsm5/redsm5_posts.csv')
     parser.add_argument('--annotations_path', type=str, default='Data/redsm5/redsm5_annotations.csv')
     parser.add_argument('--criteria_path', type=str, default='Data/DSM-5/DSM_Criteria_Array_Fixed_Major_Depressive.json')
-    parser.add_argument('--model_name', type=str, default='SpanBERT/spanbert-base-cased')
+    parser.add_argument('--model_name', type=str, default='google-bert/bert-large-uncased-whole-word-masking-finetuned-squad')
     parser.add_argument('--batch_size', type=int, default=16)
     parser.add_argument('--threshold', type=float, default=0.5)
     parser.add_argument('--output_dir', type=str, default='outputs')
@@ -285,7 +285,7 @@ def main():
     checkpoint = load_checkpoint(args.checkpoint_path, device)
 
     print("Loading model...")
-    model = SpanBERTForDSM5Classification(args.model_name, num_criteria=9)
+    model = BERTForDSM5Classification(args.model_name, num_criteria=9)
     model.load_state_dict(checkpoint['model_state_dict'])
     model = model.to(device)
 

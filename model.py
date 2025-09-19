@@ -3,13 +3,13 @@ import torch.nn as nn
 from transformers import AutoModel, AutoConfig
 from typing import Optional, Tuple
 
-class SpanBERTForDSM5Classification(nn.Module):
-    def __init__(self, model_name: str = 'SpanBERT/spanbert-base-cased', num_criteria: int = 9, dropout: float = 0.1):
-        super(SpanBERTForDSM5Classification, self).__init__()
+class BERTForDSM5Classification(nn.Module):
+    def __init__(self, model_name: str = 'google-bert/bert-large-uncased-whole-word-masking-finetuned-squad', num_criteria: int = 9, dropout: float = 0.1):
+        super(BERTForDSM5Classification, self).__init__()
         self.num_criteria = num_criteria
 
         self.config = AutoConfig.from_pretrained(model_name)
-        self.spanbert = AutoModel.from_pretrained(model_name)
+        self.bert = AutoModel.from_pretrained(model_name)
 
         self.dropout = nn.Dropout(dropout)
 
@@ -24,7 +24,7 @@ class SpanBERTForDSM5Classification(nn.Module):
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
-        outputs = self.spanbert(
+        outputs = self.bert(
             input_ids=input_ids,
             attention_mask=attention_mask
         )
@@ -74,13 +74,13 @@ class FocalLoss(nn.Module):
         else:
             return focal_loss
 
-def get_model(model_name: str = 'SpanBERT/spanbert-base-cased', num_criteria: int = 9, device: str = None) -> Tuple[SpanBERTForDSM5Classification, torch.device]:
+def get_model(model_name: str = 'google-bert/bert-large-uncased-whole-word-masking-finetuned-squad', num_criteria: int = 9, device: str = None) -> Tuple[BERTForDSM5Classification, torch.device]:
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     else:
         device = torch.device(device)
 
-    model = SpanBERTForDSM5Classification(model_name, num_criteria)
+    model = BERTForDSM5Classification(model_name, num_criteria)
     model = model.to(device)
 
     return model, device

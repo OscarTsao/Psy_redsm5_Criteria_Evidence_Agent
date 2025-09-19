@@ -107,7 +107,7 @@ def split_data(df: pd.DataFrame, test_size: float = 0.2, val_size: float = 0.1, 
 
     return train_df, val_df, test_df
 
-def create_datasets(train_df, val_df, test_df, tokenizer_name='SpanBERT/spanbert-base-cased'):
+def create_datasets(train_df, val_df, test_df, tokenizer_name='google-bert/bert-large-uncased-whole-word-masking-finetuned-squad'):
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
 
     train_dataset = DSM5CriteriaDataset(

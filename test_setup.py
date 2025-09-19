@@ -1,8 +1,8 @@
 import torch
-from model import SpanBERTForDSM5Classification, get_model
+from model import BERTForDSM5Classification, get_model
 from data_preprocessing import prepare_data, split_data, create_datasets
 
-print("Testing SpanBERT setup...")
+print("Testing BERT setup...")
 
 # Test data loading
 print("\n1. Testing data preprocessing...")
