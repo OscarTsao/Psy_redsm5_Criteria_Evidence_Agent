@@ -13,11 +13,12 @@ class SpanBERTForDSM5Classification(nn.Module):
 
         self.dropout = nn.Dropout(dropout)
 
+        # Multi-binary classification head - each criterion is an independent binary classifier
         self.classifier = nn.Sequential(
             nn.Linear(self.config.hidden_size, 256),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(256, num_criteria)
+            nn.Linear(256, num_criteria)  # 9 independent binary classifiers
         )
 
         self.sigmoid = nn.Sigmoid()
@@ -37,8 +38,17 @@ class SpanBERTForDSM5Classification(nn.Module):
         return logits
 
     def predict(self, input_ids: torch.Tensor, attention_mask: torch.Tensor, threshold: float = 0.5) -> torch.Tensor:
+        """
+        Predict DSM-5 criteria presence for each post.
+        Each criterion is treated as an independent binary classification.
+
+        Returns:
+            predictions: Binary predictions for each criterion (batch_size, 9)
+            probs: Probability scores for each criterion (batch_size, 9)
+        """
         logits = self.forward(input_ids, attention_mask)
         probs = self.sigmoid(logits)
+        # Independent binary classification for each criterion
         predictions = (probs > threshold).float()
         return predictions, probs
 

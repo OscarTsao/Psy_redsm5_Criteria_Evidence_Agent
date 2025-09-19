@@ -60,6 +60,11 @@ def create_symptom_mapping() -> Dict[str, str]:
     }
 
 def prepare_data(posts_path: str, annotations_path: str, criteria_path: str):
+    """
+    Prepare data for multi-binary classification.
+    Each post gets 9 binary labels (one for each DSM-5 criterion).
+    Each criterion is independently classified as present (1) or absent (0).
+    """
     posts_df = pd.read_csv(posts_path)
     annotations_df = pd.read_csv(annotations_path)
     criteria_map = load_dsm5_criteria(criteria_path)
@@ -72,24 +77,26 @@ def prepare_data(posts_path: str, annotations_path: str, criteria_path: str):
     for post_id in posts_df['post_id'].unique():
         post_text = posts_df[posts_df['post_id'] == post_id]['text'].values[0]
 
-        labels = np.zeros(9)
+        # Initialize binary labels for each of the 9 criteria (0 = absent, 1 = present)
+        binary_labels = np.zeros(9, dtype=np.float32)
 
         post_annotations = annotations_df[
             (annotations_df['post_id'] == post_id) &
             (annotations_df['status'] == 1)
         ]
 
+        # Set binary labels for present criteria
         for _, ann in post_annotations.iterrows():
             symptom = ann['DSM5_symptom'].upper()
             if symptom in symptom_to_criteria:
                 criteria_id = symptom_to_criteria[symptom]
                 criteria_idx = int(criteria_id.split('.')[1]) - 1
-                labels[criteria_idx] = 1
+                binary_labels[criteria_idx] = 1
 
         processed_data.append({
             'post_id': post_id,
             'text': post_text,
-            'labels': labels
+            'labels': binary_labels
         })
 
     return pd.DataFrame(processed_data)

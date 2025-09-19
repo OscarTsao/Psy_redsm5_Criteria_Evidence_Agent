@@ -7,7 +7,7 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
         curl \
         git \
         wget \
-        vim \
+        nano \
         htop \
         tree \
         zip \
@@ -18,9 +18,12 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
 RUN pip install --upgrade pip setuptools wheel
 
 # Pre-install common ML/NLP packages to speed up container startup
-# Install PyTorch with CUDA support
+# Install PyTorch with CUDA support first
 RUN pip install --no-cache-dir \
-    torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 \
+    torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
+
+# Install other packages from standard PyPI
+RUN pip install --no-cache-dir \
     transformers \
     pandas \
     numpy \

@@ -18,21 +18,29 @@ def load_checkpoint(checkpoint_path, device):
     return checkpoint
 
 def evaluate_model(model, test_loader, device, threshold=0.5):
+    """
+    Evaluate model using multi-binary classification.
+    Each criterion is independently classified as present/absent using the threshold.
+    """
     model.eval()
     all_predictions = []
     all_probs = []
     all_labels = []
-    all_post_ids = []
 
     with torch.no_grad():
-        progress_bar = tqdm(test_loader, desc='Evaluating')
+        progress_bar = tqdm(test_loader, desc='Evaluating Multi-Binary Classification')
         for batch_idx, batch in enumerate(progress_bar):
             input_ids = batch['input_ids'].to(device)
             attention_mask = batch['attention_mask'].to(device)
             labels = batch['labels'].to(device)
 
+            # Get logits for all 9 criteria
             logits = model(input_ids, attention_mask)
+
+            # Apply sigmoid to get probabilities for each criterion independently
             probs = torch.sigmoid(logits)
+
+            # Apply threshold independently to each criterion
             predictions = (probs > threshold).float()
 
             all_predictions.extend(predictions.cpu().numpy())
@@ -127,27 +135,31 @@ def save_predictions(test_df, predictions, labels, probs, output_path):
     return results_df
 
 def print_metrics_summary(metrics):
-    print("\n" + "="*50)
-    print("EVALUATION METRICS SUMMARY")
-    print("="*50)
+    print("\n" + "="*60)
+    print("MULTI-BINARY CLASSIFICATION EVALUATION SUMMARY")
+    print("="*60)
+    print("Each DSM-5 criterion evaluated as independent binary classification")
 
-    print("\nOverall Performance:")
-    print("-"*30)
+    print("\nOverall Performance (Across All Criteria):")
+    print("-"*40)
     for key, value in metrics['overall'].items():
         if isinstance(value, float):
-            print(f"{key:20s}: {value:.4f}")
+            print(f"{key:25s}: {value:.4f}")
         else:
-            print(f"{key:20s}: {value}")
+            print(f"{key:25s}: {value}")
 
-    print("\nPer-Criteria Performance:")
-    print("-"*30)
+    print("\nPer-Criterion Binary Classification Performance:")
+    print("-"*80)
     print(f"{'Criteria':<10} {'Symptom':<20} {'Precision':<10} {'Recall':<10} {'F1':<10} {'Support':<10}")
-    print("-"*70)
+    print("-"*80)
 
     for criteria in metrics['per_criteria']:
         print(f"{criteria['criteria']:<10} {criteria['symptom']:<20} "
               f"{criteria['precision']:<10.3f} {criteria['recall']:<10.3f} "
               f"{criteria['f1']:<10.3f} {criteria['support']:<10}")
+
+    print(f"\nNote: Each criterion is independently classified as Present (1) or Absent (0)")
+    print(f"Multiple criteria can be predicted as present for a single post.")
 
 def main():
     parser = argparse.ArgumentParser(description='Predict DSM-5 Criteria using trained SpanBERT model')
