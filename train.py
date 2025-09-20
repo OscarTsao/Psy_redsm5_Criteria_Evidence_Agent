@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.optim import AdamW
+from torch.cuda.amp import GradScaler, autocast
 from transformers import get_linear_schedule_with_warmup
 import numpy as np
 from tqdm import tqdm
@@ -26,40 +27,66 @@ class Trainer:
         self.config = config
         self.best_val_f1 = 0
         self.patience_counter = 0
+        self.scaler = GradScaler() if config.get('use_amp', True) else None
+        self.gradient_accumulation_steps = config.get('gradient_accumulation_steps', 1)
 
     def train_epoch(self):
         self.model.train()
         total_loss = 0
         all_predictions = []
         all_labels = []
+        accumulated_loss = 0
 
         progress_bar = tqdm(self.train_loader, desc='Training')
-        for batch in progress_bar:
+        for step, batch in enumerate(progress_bar):
             input_ids = batch['input_ids'].to(self.device)
             attention_mask = batch['attention_mask'].to(self.device)
             labels = batch['labels'].to(self.device)
 
-            self.optimizer.zero_grad()
+            if self.scaler:  # Mixed precision training
+                with autocast():
+                    logits = self.model(input_ids, attention_mask)
+                    loss = self.criterion(logits, labels)
+                    loss = loss / self.gradient_accumulation_steps
 
-            logits = self.model(input_ids, attention_mask)
-            loss = self.criterion(logits, labels)
+                self.scaler.scale(loss).backward()
+                accumulated_loss += loss.item()
 
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config['max_grad_norm'])
+                if (step + 1) % self.gradient_accumulation_steps == 0:
+                    self.scaler.unscale_(self.optimizer)
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config['max_grad_norm'])
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                    self.optimizer.zero_grad()
+                    self.scheduler.step()
 
-            self.optimizer.step()
-            self.scheduler.step()
+                    total_loss += accumulated_loss
+                    accumulated_loss = 0
+            else:  # Standard training
+                logits = self.model(input_ids, attention_mask)
+                loss = self.criterion(logits, labels)
+                loss = loss / self.gradient_accumulation_steps
 
-            total_loss += loss.item()
+                loss.backward()
+                accumulated_loss += loss.item()
+
+                if (step + 1) % self.gradient_accumulation_steps == 0:
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config['max_grad_norm'])
+                    self.optimizer.step()
+                    self.optimizer.zero_grad()
+                    self.scheduler.step()
+
+                    total_loss += accumulated_loss
+                    accumulated_loss = 0
 
             with torch.no_grad():
                 predictions = torch.sigmoid(logits) > self.config['threshold']
                 all_predictions.extend(predictions.cpu().numpy())
                 all_labels.extend(labels.cpu().numpy())
 
-            progress_bar.set_postfix({'loss': loss.item()})
+            progress_bar.set_postfix({'loss': loss.item() * self.gradient_accumulation_steps})
 
-        avg_loss = total_loss / len(self.train_loader)
+        avg_loss = total_loss / (len(self.train_loader) // self.gradient_accumulation_steps)
         metrics = self.calculate_metrics(np.array(all_labels), np.array(all_predictions))
 
         return avg_loss, metrics
@@ -78,8 +105,13 @@ class Trainer:
                 attention_mask = batch['attention_mask'].to(self.device)
                 labels = batch['labels'].to(self.device)
 
-                logits = self.model(input_ids, attention_mask)
-                loss = self.criterion(logits, labels)
+                if self.scaler:  # Mixed precision validation
+                    with autocast():
+                        logits = self.model(input_ids, attention_mask)
+                        loss = self.criterion(logits, labels)
+                else:
+                    logits = self.model(input_ids, attention_mask)
+                    loss = self.criterion(logits, labels)
 
                 total_loss += loss.item()
 
@@ -214,6 +246,10 @@ def main():
     parser.add_argument('--threshold', type=float, default=0.5)
     parser.add_argument('--patience', type=int, default=5)
     parser.add_argument('--use_focal_loss', action='store_true', help='Use Focal Loss instead of BCEWithLogitsLoss')
+    parser.add_argument('--use_amp', action='store_true', default=True, help='Use Automatic Mixed Precision')
+    parser.add_argument('--gradient_accumulation_steps', type=int, default=1, help='Number of steps to accumulate gradients')
+    parser.add_argument('--num_workers', type=int, default=4, help='Number of data loading workers')
+    parser.add_argument('--use_compile', action='store_true', help='Use torch.compile for optimization')
     parser.add_argument('--output_dir', type=str, default='outputs')
     parser.add_argument('--seed', type=int, default=42)
 
@@ -235,12 +271,42 @@ def main():
         train_df, val_df, test_df, args.model_name
     )
 
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
-    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=args.num_workers,
+        pin_memory=True,
+        persistent_workers=True if args.num_workers > 0 else False
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.num_workers,
+        pin_memory=True,
+        persistent_workers=True if args.num_workers > 0 else False
+    )
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.num_workers,
+        pin_memory=True,
+        persistent_workers=True if args.num_workers > 0 else False
+    )
 
     print("Initializing model...")
     model, device = get_model(args.model_name, num_criteria=9)
+
+    # Enable gradient checkpointing for memory efficiency
+    if hasattr(model.bert, 'gradient_checkpointing_enable'):
+        model.bert.gradient_checkpointing_enable()
+
+    # Compile model for optimization (PyTorch 2.0+)
+    if args.use_compile and hasattr(torch, 'compile'):
+        print("Compiling model with torch.compile...")
+        model = torch.compile(model, mode='max-autotune')
 
     if args.use_focal_loss:
         criterion = FocalLoss()
@@ -249,7 +315,7 @@ def main():
 
     optimizer = AdamW(model.parameters(), lr=args.learning_rate)
 
-    total_steps = len(train_loader) * args.num_epochs
+    total_steps = (len(train_loader) // args.gradient_accumulation_steps) * args.num_epochs
     warmup_steps = int(total_steps * args.warmup_ratio)
     scheduler = get_linear_schedule_with_warmup(
         optimizer,
@@ -265,7 +331,11 @@ def main():
         'threshold': args.threshold,
         'patience': args.patience,
         'output_dir': args.output_dir,
-        'model_name': args.model_name
+        'model_name': args.model_name,
+        'use_amp': args.use_amp,
+        'gradient_accumulation_steps': args.gradient_accumulation_steps,
+        'num_workers': args.num_workers,
+        'use_compile': args.use_compile
     }
 
     trainer = Trainer(model, device, train_loader, val_loader, optimizer, scheduler, criterion, config)
