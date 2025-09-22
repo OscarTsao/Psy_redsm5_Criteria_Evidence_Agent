@@ -73,7 +73,10 @@ python predict.py \
 - Multi-label classification for 9 DSM-5 criteria
 - Focal loss support for imbalanced datasets
 - Early stopping with patience-based training
+- Enhanced checkpoint naming with embedded evaluation metrics
 - Comprehensive evaluation metrics (F1, AUC, Hamming loss, exact match)
+- Detailed per-case prediction outputs for human evaluation
+- Error analysis and simplified review files
 - Gradient clipping and learning rate scheduling
 
 ## Data Structure
@@ -90,12 +93,20 @@ Data/
 
 ## Output Files
 
-Training and prediction generate:
-- `predictions.csv`: Post IDs, predicted labels, ground truth, probabilities
+### Training Outputs
+- `best_model_epoch{N}_f1macro{score}_f1micro{score}_exact{score}_hamming{score}.pt`: Enhanced checkpoint with metrics in filename
+- `best_model.pt`: Generic checkpoint for compatibility
+- `training_history.json`: Per-epoch training/validation metrics
+
+### Evaluation Outputs
+- `predictions.csv`: Detailed per-case predictions with full text and metrics
+- `predictions_simplified.csv`: Human-readable summary for quick review
+- `predictions_errors.csv`: Only incorrect predictions for error analysis
 - `evaluation_metrics.json`: Detailed performance metrics
 - `evaluation_summary.txt`: Human-readable metrics summary
-- `training_history.json`: Per-epoch training/validation metrics
-- `best_model.pt`: Best performing model checkpoint
+- `evaluation_report.txt`: Comprehensive report with model and training info
+- `confusion_matrices.png`: Visualization of per-criterion confusion matrices
+- `confusion_matrices.json`: Raw confusion matrix data
 
 ## DSM-5 Criteria Mapping
 
