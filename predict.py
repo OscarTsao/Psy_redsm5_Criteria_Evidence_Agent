@@ -163,29 +163,93 @@ def save_predictions(test_df, predictions, labels, probs, output_path, threshold
         num_predicted_criteria = int(np.sum(post_predictions))
         num_actual_criteria = int(np.sum(post_labels))
 
+        # Calculate additional metrics for human evaluation
+        true_positives = int(np.sum((post_predictions == 1) & (post_labels == 1)))
+        false_positives = int(np.sum((post_predictions == 1) & (post_labels == 0)))
+        false_negatives = int(np.sum((post_predictions == 0) & (post_labels == 1)))
+        true_negatives = int(np.sum((post_predictions == 0) & (post_labels == 0)))
+
+        # Calculate post-level precision, recall, F1
+        post_precision = true_positives / (true_positives + false_positives) if (true_positives + false_positives) > 0 else 0.0
+        post_recall = true_positives / (true_positives + false_negatives) if (true_positives + false_negatives) > 0 else 0.0
+        post_f1 = 2 * (post_precision * post_recall) / (post_precision + post_recall) if (post_precision + post_recall) > 0 else 0.0
+
+        # Create summary strings for easier human review
+        predicted_criteria_list = [f"A.{i+1}" for i, pred in enumerate(post_predictions) if pred == 1]
+        actual_criteria_list = [f"A.{i+1}" for i, label in enumerate(post_labels) if label == 1]
+
         post_result = {
             'post_id': row['post_id'],
-            'text': row['text'][:300] + '...' if len(row['text']) > 300 else row['text'],
+            'full_text': row['text'],  # Full text for human evaluation
+            'text_preview': row['text'][:500] + '...' if len(row['text']) > 500 else row['text'],
+            'text_length': len(row['text']),
             'post_exact_match': int(exact_match),
             'post_accuracy': float(post_accuracy),
+            'post_precision': float(post_precision),
+            'post_recall': float(post_recall),
+            'post_f1': float(post_f1),
             'num_predicted_criteria': num_predicted_criteria,
             'num_actual_criteria': num_actual_criteria,
-            'threshold_used': threshold
+            'predicted_criteria_summary': '; '.join(predicted_criteria_list) if predicted_criteria_list else 'None',
+            'actual_criteria_summary': '; '.join(actual_criteria_list) if actual_criteria_list else 'None',
+            'threshold_used': threshold,
+            'evaluation_outcome': 'CORRECT' if exact_match else 'INCORRECT'
         }
 
-        # Add individual criteria predictions
+        # Add individual criteria predictions with human-readable format
         for i, (criteria_id, symptom) in enumerate(symptom_mapping.items()):
-            post_result[f'{criteria_id}_predicted'] = int(post_predictions[i])
-            post_result[f'{criteria_id}_groundtruth'] = int(post_labels[i])
-            post_result[f'{criteria_id}_probability'] = float(post_probs[i])
+            pred = int(post_predictions[i])
+            truth = int(post_labels[i])
+            prob = float(post_probs[i])
+            correct = int(pred == truth)
+
+            post_result[f'{criteria_id}_predicted'] = pred
+            post_result[f'{criteria_id}_groundtruth'] = truth
+            post_result[f'{criteria_id}_probability'] = prob
             post_result[f'{criteria_id}_symptom'] = symptom
-            post_result[f'{criteria_id}_correct'] = int(post_predictions[i] == post_labels[i])
+            post_result[f'{criteria_id}_correct'] = correct
+
+            # Add human-readable evaluation for each criterion
+            if pred == truth:
+                outcome = 'CORRECT'
+            elif pred == 1 and truth == 0:
+                outcome = 'FALSE_POSITIVE'
+            else:  # pred == 0 and truth == 1
+                outcome = 'FALSE_NEGATIVE'
+            post_result[f'{criteria_id}_outcome'] = outcome
 
         results.append(post_result)
 
     results_df = pd.DataFrame(results)
+
+    # Save main predictions file
     results_df.to_csv(output_path, index=False)
-    print(f"Predictions saved to {output_path}")
+    print(f"Detailed predictions saved to {output_path}")
+
+    # Save a simplified version for quick human review
+    base_path = output_path.replace('.csv', '')
+    simplified_path = f"{base_path}_simplified.csv"
+
+    simplified_cols = [
+        'post_id', 'text_preview', 'evaluation_outcome', 'post_accuracy', 'post_f1',
+        'predicted_criteria_summary', 'actual_criteria_summary',
+        'num_predicted_criteria', 'num_actual_criteria'
+    ]
+
+    results_df[simplified_cols].to_csv(simplified_path, index=False)
+    print(f"Simplified predictions for human review saved to {simplified_path}")
+
+    # Save error analysis file (only incorrect predictions)
+    errors_path = f"{base_path}_errors.csv"
+    error_df = results_df[results_df['post_exact_match'] == 0].copy()
+
+    if len(error_df) > 0:
+        # Sort by post_accuracy (worst first) for easier review
+        error_df = error_df.sort_values('post_accuracy')
+        error_df.to_csv(errors_path, index=False)
+        print(f"Error analysis file saved to {errors_path} ({len(error_df)} incorrect predictions)")
+    else:
+        print("No prediction errors found!")
 
     return results_df
 
@@ -264,6 +328,79 @@ def print_metrics_summary(metrics):
     print(f"\nNote: Each criterion is independently classified as Present (1) or Absent (0)")
     print(f"Multiple criteria can be predicted as present for a single post.")
 
+def create_evaluation_report(checkpoint, metrics, args, output_dir):
+    """Create a comprehensive evaluation report with model and checkpoint information"""
+    from datetime import datetime
+
+    report_path = os.path.join(output_dir, 'evaluation_report.txt')
+
+    with open(report_path, 'w') as f:
+        f.write("="*80 + "\n")
+        f.write("COMPREHENSIVE EVALUATION REPORT\n")
+        f.write("DSM-5 Major Depressive Disorder Criteria Classification\n")
+        f.write("="*80 + "\n\n")
+
+        # Model and checkpoint information
+        f.write("MODEL INFORMATION:\n")
+        f.write("-"*40 + "\n")
+        f.write(f"Checkpoint file: {os.path.basename(args.checkpoint_path)}\n")
+        f.write(f"Model architecture: BERT Large\n")
+        f.write(f"Base model: {checkpoint.get('config', {}).get('model_name', 'N/A')}\n")
+        f.write(f"Training epoch: {checkpoint.get('epoch', 'N/A')}\n")
+        f.write(f"Prediction threshold: {args.threshold}\n")
+        f.write(f"Evaluation date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+
+        # Training configuration
+        if 'config' in checkpoint:
+            config = checkpoint['config']
+            f.write("TRAINING CONFIGURATION:\n")
+            f.write("-"*40 + "\n")
+            f.write(f"Batch size: {config.get('batch_size', 'N/A')}\n")
+            f.write(f"Learning rate: {config.get('learning_rate', 'N/A')}\n")
+            f.write(f"Number of epochs: {config.get('num_epochs', 'N/A')}\n")
+            f.write(f"Patience: {config.get('patience', 'N/A')}\n")
+            f.write(f"Gradient accumulation steps: {config.get('gradient_accumulation_steps', 'N/A')}\n")
+            f.write(f"Mixed precision: {config.get('use_amp', 'N/A')}\n\n")
+
+        # Validation metrics from training
+        if 'metrics' in checkpoint:
+            val_metrics = checkpoint['metrics']
+            f.write("VALIDATION METRICS (from training):\n")
+            f.write("-"*40 + "\n")
+            f.write(f"F1 Macro: {val_metrics.get('f1_macro', 'N/A'):.4f}\n")
+            f.write(f"F1 Micro: {val_metrics.get('f1_micro', 'N/A'):.4f}\n")
+            f.write(f"Exact Match Ratio: {val_metrics.get('exact_match_ratio', 'N/A'):.4f}\n")
+            f.write(f"Hamming Loss: {val_metrics.get('hamming_loss', 'N/A'):.4f}\n\n")
+
+        # Test set evaluation results
+        f.write("TEST SET EVALUATION RESULTS:\n")
+        f.write("-"*40 + "\n")
+        f.write("Overall Performance:\n")
+        for key, value in metrics['overall'].items():
+            if isinstance(value, float):
+                f.write(f"  {key:25s}: {value:.4f}\n")
+            else:
+                f.write(f"  {key:25s}: {value}\n")
+
+        f.write("\nPer-Criterion Performance:\n")
+        f.write("  " + "-"*80 + "\n")
+        f.write(f"  {'Criteria':<8} {'Symptom':<20} {'Acc':<6} {'Prec':<6} {'Rec':<6} {'F1':<6} {'AUC':<6} {'Spec':<6} {'Supp':<6}\n")
+        f.write("  " + "-"*80 + "\n")
+
+        for criteria in metrics['per_criteria']:
+            auc_str = f"{criteria['auc']:.3f}" if criteria['auc'] is not None else "N/A"
+            f.write(f"  {criteria['criteria']:<8} {criteria['symptom'][:18]:<20} "
+                   f"{criteria['accuracy']:<6.3f} {criteria['precision']:<6.3f} "
+                   f"{criteria['recall']:<6.3f} {criteria['f1']:<6.3f} "
+                   f"{auc_str:<6} {criteria['specificity']:<6.3f} "
+                   f"{criteria['support']:<6}\n")
+
+        f.write("\n" + "="*80 + "\n")
+        f.write("Generated by DSM-5 Criteria Classification System\n")
+        f.write("="*80 + "\n")
+
+    print(f"Comprehensive evaluation report saved to {report_path}")
+
 def main():
     parser = argparse.ArgumentParser(description='Predict DSM-5 Criteria using trained BERT model')
     parser.add_argument('--checkpoint_path', type=str, required=True, help='Path to model checkpoint')
@@ -314,6 +451,9 @@ def main():
 
     # Save confusion matrix visualizations
     save_confusion_matrix_plots(metrics, args.output_dir)
+
+    # Create comprehensive evaluation report
+    create_evaluation_report(checkpoint, metrics, args, args.output_dir)
 
     metrics_path = os.path.join(args.output_dir, 'evaluation_metrics.json')
     with open(metrics_path, 'w') as f:

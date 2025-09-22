@@ -219,17 +219,34 @@ class Trainer:
         return train_history, val_history
 
     def save_checkpoint(self, epoch, metrics):
-        checkpoint_path = os.path.join(self.config['output_dir'], 'best_model.pt')
-        torch.save({
+        # Create checkpoint filename with evaluation metrics
+        f1_macro = metrics['f1_macro']
+        f1_micro = metrics['f1_micro']
+        exact_match = metrics['exact_match_ratio']
+        hamming = metrics['hamming_loss']
+
+        checkpoint_filename = f"best_model_epoch{epoch}_f1macro{f1_macro:.4f}_f1micro{f1_micro:.4f}_exact{exact_match:.4f}_hamming{hamming:.4f}.pt"
+        checkpoint_path = os.path.join(self.config['output_dir'], checkpoint_filename)
+
+        # Also save as generic best_model.pt for compatibility
+        generic_path = os.path.join(self.config['output_dir'], 'best_model.pt')
+
+        checkpoint_data = {
             'epoch': epoch,
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'scheduler_state_dict': self.scheduler.state_dict(),
             'best_f1': self.best_val_f1,
             'metrics': metrics,
-            'config': self.config
-        }, checkpoint_path)
-        print(f"Model checkpoint saved with F1: {self.best_val_f1:.4f}")
+            'config': self.config,
+            'checkpoint_filename': checkpoint_filename
+        }
+
+        torch.save(checkpoint_data, checkpoint_path)
+        torch.save(checkpoint_data, generic_path)
+
+        print(f"Model checkpoint saved: {checkpoint_filename}")
+        print(f"Validation metrics - F1 Macro: {f1_macro:.4f}, F1 Micro: {f1_micro:.4f}, Exact Match: {exact_match:.4f}")
 
 def main():
     parser = argparse.ArgumentParser(description='Train BERT for DSM-5 Criteria Classification')
