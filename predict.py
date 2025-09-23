@@ -1,7 +1,5 @@
 import argparse
-import json
 import os
-from collections import defaultdict
 
 import numpy as np
 import pandas as pd
@@ -10,7 +8,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from model import BERTForPairwiseClassification
-from data import make_pairwise_datasets, load_dsm5_criteria
+from data import make_pairwise_datasets
 
 
 def load_checkpoint(path: str, device: torch.device):
@@ -48,7 +46,7 @@ def main():
     parser.add_argument('--posts_path', type=str, default='Data/redsm5/redsm5_posts.csv')
     parser.add_argument('--annotations_path', type=str, default='Data/redsm5/redsm5_annotations.csv')
     parser.add_argument('--criteria_path', type=str, default='Data/DSM-5/DSM_Criteria_Array_Fixed_Major_Depressive.json')
-    parser.add_argument('--batch_size', type=int, default=16)
+    parser.add_argument('--batch_size', type=int, default=64)
     parser.add_argument('--threshold', type=float, default=0.5)
     parser.add_argument('--output_dir', type=str, default='outputs')
 
@@ -77,22 +75,20 @@ def main():
     crit_ids_sorted = sorted(criteria_map.keys(), key=lambda x: int(x.split('.')[1]))
     crit_index_map = {i: cid for i, cid in enumerate(crit_ids_sorted)}
 
-    # Rebuild post-level view
-    records = []
-    # We need post ids; rebuild by recomputing pairs df order from dataset inputs size
-    # The current dataset doesn’t return post_id; to export post-level CSV, we’d extend dataset to include it.
-    # For now, just write per-criterion aggregates.
+    # Create CSV output with pairwise results
+    results_df = pd.DataFrame({
+        'probability': probs.flatten(),
+        'prediction': preds.astype(int).flatten(),
+        'true_label': labels.astype(int).flatten(),
+        'criterion_idx': cidx.flatten(),
+        'criterion_id': [crit_index_map.get(idx, f'unknown_{idx}') for idx in cidx.flatten()]
+    })
 
-    out = {
-        'probs': probs.tolist(),
-        'preds': preds.astype(int).tolist(),
-        'labels': labels.astype(int).tolist(),
-        'criterion_idx': cidx.tolist(),
-    }
-    with open(os.path.join(args.output_dir, 'test_raw_pairs.json'), 'w') as f:
-        json.dump(out, f)
+    # Save to CSV
+    csv_path = os.path.join(args.output_dir, 'test_raw_pairs.csv')
+    results_df.to_csv(csv_path, index=False)
 
-    print('Saved pairwise raw outputs to test_raw_pairs.json')
+    print(f'Saved pairwise raw outputs to {csv_path}')
 
 
 if __name__ == '__main__':
