@@ -82,12 +82,13 @@ def expand_to_pairs(df: pd.DataFrame, criteria_map: Dict[str, str]) -> pd.DataFr
 class CriteriaPairDataset(Dataset):
     """Tokenize (post, criterion) as a pair: [CLS] post [SEP] criterion [SEP]."""
 
-    def __init__(self, posts: List[str], criteria: List[str], labels: List[float], criterion_indices: List[int], tokenizer_name: str,
+    def __init__(self, posts: List[str], criteria: List[str], labels: List[float], criterion_indices: List[int], post_ids: List[str], tokenizer_name: str,
                  max_length: int = 512):
         self.posts = posts
         self.criteria = criteria
         self.labels = labels
         self.criterion_indices = criterion_indices
+        self.post_ids = post_ids
         self.max_length = max_length
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
 
@@ -99,6 +100,7 @@ class CriteriaPairDataset(Dataset):
         criterion = str(self.criteria[idx])
         label = float(self.labels[idx])
         cidx = int(self.criterion_indices[idx])
+        post_id = str(self.post_ids[idx])
 
         enc = self.tokenizer(
             text,
@@ -114,6 +116,7 @@ class CriteriaPairDataset(Dataset):
             "attention_mask": enc["attention_mask"].squeeze(0),
             "labels": torch.tensor(label, dtype=torch.float32),
             "criterion_idx": torch.tensor(cidx, dtype=torch.long),
+            "post_id": post_id,
         }
 
 
@@ -148,6 +151,7 @@ def make_pairwise_datasets(posts_path: str,
             criteria=sub_df["criteria_text"].tolist(),
             labels=sub_df["y"].tolist(),
             criterion_indices=sub_df["criteria_idx"].tolist(),
+            post_ids=sub_df["post_id"].tolist(),
             tokenizer_name=tokenizer_name,
             max_length=max_length,
         )

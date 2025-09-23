@@ -18,7 +18,7 @@ def load_checkpoint(path: str, device: torch.device):
 
 def score_pairs(model, loader, device, threshold: float = 0.5):
     model.eval()
-    probs_all, preds_all, labels_all, cidx_all = [], [], [], []
+    probs_all, preds_all, labels_all, cidx_all, post_ids_all = [], [], [], [], []
     with torch.no_grad():
         for batch in tqdm(loader, desc='Scoring'):
             input_ids = batch['input_ids'].to(device)
@@ -31,12 +31,14 @@ def score_pairs(model, loader, device, threshold: float = 0.5):
             preds_all.append(preds.cpu().numpy())
             labels_all.append(labels.cpu().numpy())
             cidx_all.append(batch['criterion_idx'].cpu().numpy())
+            post_ids_all.extend(batch['post_id'])
 
     return (
         np.concatenate(probs_all),
         np.concatenate(preds_all),
         np.concatenate(labels_all),
         np.concatenate(cidx_all),
+        post_ids_all,
     )
 
 
@@ -69,7 +71,7 @@ def main():
     )
     test_loader = DataLoader(test_ds, batch_size=args.batch_size)
 
-    probs, preds, labels, cidx = score_pairs(model, test_loader, device, threshold=args.threshold)
+    probs, preds, labels, cidx, post_ids = score_pairs(model, test_loader, device, threshold=args.threshold)
 
     # Aggregate to per-post 9 scores/preds by order of criteria id A.1..A.9
     crit_ids_sorted = sorted(criteria_map.keys(), key=lambda x: int(x.split('.')[1]))
@@ -77,6 +79,7 @@ def main():
 
     # Create CSV output with pairwise results
     results_df = pd.DataFrame({
+        'post_id': post_ids,
         'probability': probs.flatten(),
         'prediction': preds.astype(int).flatten(),
         'true_label': labels.astype(int).flatten(),
