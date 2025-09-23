@@ -1,55 +1,58 @@
+#!/usr/bin/env python3
+"""
+Simple test to validate pairwise data loading and model initialization.
+"""
+
 import torch
-from model import BERTForDSM5Classification, get_model
-from data_preprocessing import prepare_data, split_data, create_datasets
+from data import make_pairwise_datasets
+from model import get_pairwise_model
 
-print("Testing BERT setup...")
+def test_setup():
+    print("Testing pairwise data loading and model setup...")
 
-# Test data loading
-print("\n1. Testing data preprocessing...")
-df = prepare_data(
-    "Data/redsm5/redsm5_posts.csv",
-    "Data/redsm5/redsm5_annotations.csv",
-    "Data/DSM-5/DSM_Criteria_Array_Fixed_Major_Depressive.json"
-)
-print(f"   ✓ Loaded {len(df)} posts")
+    # Test data loading
+    try:
+        train_ds, val_ds, test_ds, criteria_map = make_pairwise_datasets(
+            'Data/redsm5/redsm5_posts.csv',
+            'Data/redsm5/redsm5_annotations.csv',
+            'Data/DSM-5/DSM_Criteria_Array_Fixed_Major_Depressive.json',
+            tokenizer_name='bert-base-uncased'
+        )
+        print(f"✓ Data loading successful")
+        print(f"  - Train pairs: {len(train_ds)}")
+        print(f"  - Val pairs: {len(val_ds)}")
+        print(f"  - Test pairs: {len(test_ds)}")
+        print(f"  - Criteria count: {len(criteria_map)}")
 
-# Test data splitting
-train_df, val_df, test_df = split_data(df)
-print(f"   ✓ Split data: Train={len(train_df)}, Val={len(val_df)}, Test={len(test_df)}")
+        # Test a single batch
+        sample = train_ds[0]
+        print(f"  - Sample input shape: {sample['input_ids'].shape}")
+        print(f"  - Sample label: {sample['labels'].item()}")
+        print(f"  - Sample criterion idx: {sample['criterion_idx'].item()}")
 
-# Test model initialization
-print("\n2. Testing model initialization...")
-try:
-    model, device = get_model(num_criteria=9, device='cpu')
-    print(f"   ✓ Model initialized on {device}")
+    except Exception as e:
+        print(f"✗ Data loading failed: {e}")
+        return False
 
-    # Test forward pass with dummy input
-    dummy_input_ids = torch.randint(0, 1000, (2, 128)).to(device)
-    dummy_attention_mask = torch.ones(2, 128).to(device)
+    # Test model initialization
+    try:
+        model, device = get_pairwise_model('bert-base-uncased')
+        print(f"✓ Model initialization successful")
+        print(f"  - Device: {device}")
+        print(f"  - Model type: {type(model).__name__}")
 
-    with torch.no_grad():
-        output = model(dummy_input_ids, dummy_attention_mask)
+        # Test forward pass
+        with torch.no_grad():
+            logits = model(sample['input_ids'].unsqueeze(0).to(device),
+                          sample['attention_mask'].unsqueeze(0).to(device))
+            print(f"  - Forward pass output shape: {logits.shape}")
 
-    print(f"   ✓ Forward pass successful, output shape: {output.shape}")
-    assert output.shape == (2, 9), "Output shape mismatch"
+    except Exception as e:
+        print(f"✗ Model initialization failed: {e}")
+        return False
 
-except Exception as e:
-    print(f"   ✗ Error: {e}")
+    print("✓ All tests passed!")
+    return True
 
-print("\n3. Testing dataset creation...")
-try:
-    train_dataset, val_dataset, test_dataset, tokenizer = create_datasets(
-        train_df[:10], val_df[:5], test_df[:5]  # Small subset for testing
-    )
-    print(f"   ✓ Datasets created successfully")
-
-    # Test single sample
-    sample = train_dataset[0]
-    print(f"   ✓ Sample keys: {sample.keys()}")
-    print(f"   ✓ Input shape: {sample['input_ids'].shape}")
-    print(f"   ✓ Labels shape: {sample['labels'].shape}")
-
-except Exception as e:
-    print(f"   ✗ Error: {e}")
-
-print("\n✅ All tests passed! Ready for training.")
+if __name__ == '__main__':
+    test_setup()

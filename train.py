@@ -1,268 +1,88 @@
+import argparse
+import json
+import os
+from typing import Dict
+
+import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
-from torch.optim import AdamW
 from torch.cuda.amp import GradScaler, autocast
-from transformers import get_linear_schedule_with_warmup
-import numpy as np
+from sklearn.metrics import precision_recall_fscore_support, roc_auc_score, accuracy_score
+from torch.utils.data import DataLoader
 from tqdm import tqdm
-import argparse
-import os
-import json
-from datetime import datetime
-from sklearn.metrics import precision_recall_fscore_support, accuracy_score, hamming_loss, roc_auc_score
 
-from data_preprocessing import prepare_data, split_data, create_datasets, create_symptom_mapping
-from model import BERTForDSM5Classification, FocalLoss, get_model
+from model import BERTForPairwiseClassification, get_pairwise_model, FocalLoss
+from data import make_pairwise_datasets, load_dsm5_criteria
 
-class Trainer:
-    def __init__(self, model, device, train_loader, val_loader, optimizer, scheduler, criterion, config):
-        self.model = model
-        self.device = device
-        self.train_loader = train_loader
-        self.val_loader = val_loader
-        self.optimizer = optimizer
-        self.scheduler = scheduler
-        self.criterion = criterion
-        self.config = config
-        self.best_val_f1 = 0
-        self.patience_counter = 0
-        self.scaler = GradScaler() if config.get('use_amp', True) else None
-        self.gradient_accumulation_steps = config.get('gradient_accumulation_steps', 1)
 
-    def train_epoch(self):
-        self.model.train()
-        total_loss = 0
-        all_predictions = []
-        all_labels = []
-        accumulated_loss = 0
+def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray, y_prob: np.ndarray) -> Dict:
+    precision, recall, f1, _ = precision_recall_fscore_support(y_true, y_pred, average='binary', zero_division=0)
+    try:
+        auc = roc_auc_score(y_true, y_prob)
+    except Exception:
+        auc = None
+    acc = accuracy_score(y_true, y_pred)
+    return {
+        'precision': float(precision),
+        'recall': float(recall),
+        'f1': float(f1),
+        'auc': None if auc is None else float(auc),
+        'accuracy': float(acc),
+    }
 
-        progress_bar = tqdm(self.train_loader, desc='Training')
-        for step, batch in enumerate(progress_bar):
-            input_ids = batch['input_ids'].to(self.device)
-            attention_mask = batch['attention_mask'].to(self.device)
-            labels = batch['labels'].to(self.device)
 
-            if self.scaler:  # Mixed precision training
+def evaluate(model, loader, device, threshold: float = 0.5, use_amp: bool = True):
+    model.eval()
+    all_y, all_pred, all_prob, all_cidx = [], [], [], []
+    with torch.no_grad():
+        for batch in tqdm(loader, desc='Eval'):
+            input_ids = batch['input_ids'].to(device)
+            attention_mask = batch['attention_mask'].to(device)
+            labels = batch['labels'].to(device)
+            cidx = batch['criterion_idx'].cpu().numpy()
+
+            if use_amp:
                 with autocast():
-                    logits = self.model(input_ids, attention_mask)
-                    loss = self.criterion(logits, labels)
-                    loss = loss / self.gradient_accumulation_steps
-
-                self.scaler.scale(loss).backward()
-                accumulated_loss += loss.item()
-
-                if (step + 1) % self.gradient_accumulation_steps == 0:
-                    self.scaler.unscale_(self.optimizer)
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config['max_grad_norm'])
-                    self.scaler.step(self.optimizer)
-                    self.scaler.update()
-                    self.optimizer.zero_grad()
-                    self.scheduler.step()
-
-                    total_loss += accumulated_loss
-                    accumulated_loss = 0
-            else:  # Standard training
-                logits = self.model(input_ids, attention_mask)
-                loss = self.criterion(logits, labels)
-                loss = loss / self.gradient_accumulation_steps
-
-                loss.backward()
-                accumulated_loss += loss.item()
-
-                if (step + 1) % self.gradient_accumulation_steps == 0:
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config['max_grad_norm'])
-                    self.optimizer.step()
-                    self.optimizer.zero_grad()
-                    self.scheduler.step()
-
-                    total_loss += accumulated_loss
-                    accumulated_loss = 0
-
-            with torch.no_grad():
-                predictions = torch.sigmoid(logits) > self.config['threshold']
-                all_predictions.extend(predictions.cpu().numpy())
-                all_labels.extend(labels.cpu().numpy())
-
-            progress_bar.set_postfix({'loss': loss.item() * self.gradient_accumulation_steps})
-
-        avg_loss = total_loss / (len(self.train_loader) // self.gradient_accumulation_steps)
-        metrics = self.calculate_metrics(np.array(all_labels), np.array(all_predictions))
-
-        return avg_loss, metrics
-
-    def validate(self):
-        self.model.eval()
-        total_loss = 0
-        all_predictions = []
-        all_labels = []
-        all_probs = []
-
-        with torch.no_grad():
-            progress_bar = tqdm(self.val_loader, desc='Validation')
-            for batch in progress_bar:
-                input_ids = batch['input_ids'].to(self.device)
-                attention_mask = batch['attention_mask'].to(self.device)
-                labels = batch['labels'].to(self.device)
-
-                if self.scaler:  # Mixed precision validation
-                    with autocast():
-                        logits = self.model(input_ids, attention_mask)
-                        loss = self.criterion(logits, labels)
-                else:
-                    logits = self.model(input_ids, attention_mask)
-                    loss = self.criterion(logits, labels)
-
-                total_loss += loss.item()
-
-                probs = torch.sigmoid(logits)
-                predictions = probs > self.config['threshold']
-
-                all_predictions.extend(predictions.cpu().numpy())
-                all_labels.extend(labels.cpu().numpy())
-                all_probs.extend(probs.cpu().numpy())
-
-        avg_loss = total_loss / len(self.val_loader)
-        metrics = self.calculate_metrics(np.array(all_labels), np.array(all_predictions), np.array(all_probs))
-
-        return avg_loss, metrics
-
-    def calculate_metrics(self, labels, predictions, probs=None):
-        """
-        Calculate metrics for multi-binary classification.
-        Each criterion is evaluated independently as a binary classification task.
-        """
-        # Overall metrics across all criteria
-        precision, recall, f1, _ = precision_recall_fscore_support(labels, predictions, average='macro', zero_division=0)
-        precision_micro, recall_micro, f1_micro, _ = precision_recall_fscore_support(labels, predictions, average='micro', zero_division=0)
-
-        # Hamming loss: fraction of wrong labels to total labels
-        h_loss = hamming_loss(labels, predictions)
-
-        # Exact match: percentage of samples with all labels predicted correctly
-        exact_match = accuracy_score(labels, predictions)
-
-        metrics = {
-            'precision_macro': precision,
-            'recall_macro': recall,
-            'f1_macro': f1,
-            'precision_micro': precision_micro,
-            'recall_micro': recall_micro,
-            'f1_micro': f1_micro,
-            'hamming_loss': h_loss,
-            'exact_match_ratio': exact_match
-        }
-
-        if probs is not None:
-            try:
-                auc_macro = roc_auc_score(labels, probs, average='macro')
-                auc_micro = roc_auc_score(labels, probs, average='micro')
-                metrics['auc_macro'] = auc_macro
-                metrics['auc_micro'] = auc_micro
-            except:
-                pass
-
-        # Per-criterion binary classification metrics
-        per_class_metrics = []
-        symptom_names = list(create_symptom_mapping().values())
-        for i in range(labels.shape[1]):
-            p, r, f, _ = precision_recall_fscore_support(labels[:, i], predictions[:, i], average='binary', zero_division=0)
-            per_class_metrics.append({
-                'criterion': f'A.{i+1}',
-                'symptom': symptom_names[i] if i < len(symptom_names) else f'Criterion_{i+1}',
-                'precision': p,
-                'recall': r,
-                'f1': f,
-                'support': int(np.sum(labels[:, i]))
-            })
-
-        metrics['per_criterion'] = per_class_metrics
-
-        return metrics
-
-    def train(self):
-        train_history = []
-        val_history = []
-
-        for epoch in range(self.config['num_epochs']):
-            print(f"\nEpoch {epoch + 1}/{self.config['num_epochs']}")
-
-            train_loss, train_metrics = self.train_epoch()
-            val_loss, val_metrics = self.validate()
-
-            train_history.append({
-                'epoch': epoch + 1,
-                'loss': train_loss,
-                **train_metrics
-            })
-
-            val_history.append({
-                'epoch': epoch + 1,
-                'loss': val_loss,
-                **val_metrics
-            })
-
-            print(f"Train Loss: {train_loss:.4f}, F1 Macro: {train_metrics['f1_macro']:.4f}")
-            print(f"Val Loss: {val_loss:.4f}, F1 Macro: {val_metrics['f1_macro']:.4f}")
-
-            if val_metrics['f1_macro'] > self.best_val_f1:
-                self.best_val_f1 = val_metrics['f1_macro']
-                self.save_checkpoint(epoch + 1, val_metrics)
-                self.patience_counter = 0
+                    logits = model(input_ids, attention_mask)
             else:
-                self.patience_counter += 1
+                logits = model(input_ids, attention_mask)
 
-            if self.patience_counter >= self.config['patience']:
-                print(f"Early stopping triggered after {epoch + 1} epochs")
-                break
+            probs = torch.sigmoid(logits)
+            preds = (probs > threshold).float()
 
-        return train_history, val_history
+            all_y.append(labels.cpu().numpy())
+            all_pred.append(preds.cpu().numpy())
+            all_prob.append(probs.cpu().numpy())
+            all_cidx.append(cidx)
 
-    def save_checkpoint(self, epoch, metrics):
-        # Create checkpoint filename with evaluation metrics
-        f1_macro = metrics['f1_macro']
-        f1_micro = metrics['f1_micro']
-        exact_match = metrics['exact_match_ratio']
-        hamming = metrics['hamming_loss']
+    y = np.concatenate(all_y)
+    y_hat = np.concatenate(all_pred)
+    y_prob = np.concatenate(all_prob)
+    cidx = np.concatenate(all_cidx)
 
-        checkpoint_filename = f"best_model_epoch{epoch}_f1macro{f1_macro:.4f}_f1micro{f1_micro:.4f}_exact{exact_match:.4f}_hamming{hamming:.4f}.pt"
-        checkpoint_path = os.path.join(self.config['output_dir'], checkpoint_filename)
+    overall = compute_metrics(y, y_hat, y_prob)
 
-        # Also save as generic best_model.pt for compatibility
-        generic_path = os.path.join(self.config['output_dir'], 'best_model.pt')
+    # Per-criterion metrics
+    per_criteria = []
+    for i in range(9):
+        m = compute_metrics(y[cidx == i], y_hat[cidx == i], y_prob[cidx == i])
+        m['criteria_idx'] = i
+        per_criteria.append(m)
 
-        checkpoint_data = {
-            'epoch': epoch,
-            'model_state_dict': self.model.state_dict(),
-            'optimizer_state_dict': self.optimizer.state_dict(),
-            'scheduler_state_dict': self.scheduler.state_dict(),
-            'best_f1': self.best_val_f1,
-            'metrics': metrics,
-            'config': self.config,
-            'checkpoint_filename': checkpoint_filename
-        }
+    return overall, per_criteria
 
-        torch.save(checkpoint_data, checkpoint_path)
-        torch.save(checkpoint_data, generic_path)
-
-        print(f"Model checkpoint saved: {checkpoint_filename}")
-        print(f"Validation metrics - F1 Macro: {f1_macro:.4f}, F1 Micro: {f1_micro:.4f}, Exact Match: {exact_match:.4f}")
 
 def main():
-    parser = argparse.ArgumentParser(description='Train BERT for DSM-5 Criteria Classification')
+    parser = argparse.ArgumentParser(description='Train BERT for DSM-5 criteria matching (pairwise).')
     parser.add_argument('--posts_path', type=str, default='Data/redsm5/redsm5_posts.csv')
     parser.add_argument('--annotations_path', type=str, default='Data/redsm5/redsm5_annotations.csv')
     parser.add_argument('--criteria_path', type=str, default='Data/DSM-5/DSM_Criteria_Array_Fixed_Major_Depressive.json')
-    parser.add_argument('--model_name', type=str, default='google-bert/bert-large-uncased-whole-word-masking-finetuned-squad')
+    parser.add_argument('--model_name', type=str, default='bert-base-uncased')
     parser.add_argument('--batch_size', type=int, default=16)
-    parser.add_argument('--num_epochs', type=int, default=20)
+    parser.add_argument('--num_epochs', type=int, default=200)
     parser.add_argument('--learning_rate', type=float, default=2e-5)
-    parser.add_argument('--warmup_ratio', type=float, default=0.1)
-    parser.add_argument('--max_grad_norm', type=float, default=1.0)
-    parser.add_argument('--dropout', type=float, default=0.1)
     parser.add_argument('--threshold', type=float, default=0.5)
-    parser.add_argument('--patience', type=int, default=5)
-    parser.add_argument('--use_focal_loss', action='store_true', help='Use Focal Loss instead of BCEWithLogitsLoss')
+    parser.add_argument('--use_focal_loss', action='store_true')
     parser.add_argument('--use_amp', action='store_true', default=True, help='Use Automatic Mixed Precision')
     parser.add_argument('--gradient_accumulation_steps', type=int, default=1, help='Number of steps to accumulate gradients')
     parser.add_argument('--num_workers', type=int, default=4, help='Number of data loading workers')
@@ -271,25 +91,18 @@ def main():
     parser.add_argument('--seed', type=int, default=42)
 
     args = parser.parse_args()
+    os.makedirs(args.output_dir, exist_ok=True)
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
 
-    if not os.path.exists(args.output_dir):
-        os.makedirs(args.output_dir)
-
-    print("Loading and preprocessing data...")
-    df = prepare_data(args.posts_path, args.annotations_path, args.criteria_path)
-    train_df, val_df, test_df = split_data(df)
-
-    print(f"Data split - Train: {len(train_df)}, Val: {len(val_df)}, Test: {len(test_df)}")
-
-    train_dataset, val_dataset, test_dataset, tokenizer = create_datasets(
-        train_df, val_df, test_df, args.model_name
+    print('Building datasets...')
+    train_ds, val_ds, test_ds, criteria_map = make_pairwise_datasets(
+        args.posts_path, args.annotations_path, args.criteria_path, tokenizer_name=args.model_name
     )
 
     train_loader = DataLoader(
-        train_dataset,
+        train_ds,
         batch_size=args.batch_size,
         shuffle=True,
         num_workers=args.num_workers,
@@ -297,28 +110,26 @@ def main():
         persistent_workers=True if args.num_workers > 0 else False
     )
     val_loader = DataLoader(
-        val_dataset,
+        val_ds,
         batch_size=args.batch_size,
-        shuffle=False,
         num_workers=args.num_workers,
         pin_memory=True,
         persistent_workers=True if args.num_workers > 0 else False
     )
     test_loader = DataLoader(
-        test_dataset,
+        test_ds,
         batch_size=args.batch_size,
-        shuffle=False,
         num_workers=args.num_workers,
         pin_memory=True,
         persistent_workers=True if args.num_workers > 0 else False
     )
 
-    print("Initializing model...")
-    model, device = get_model(args.model_name, num_criteria=9)
+    print('Initializing model...')
+    model, device = get_pairwise_model(args.model_name)
 
     # Enable gradient checkpointing for memory efficiency
-    if hasattr(model.bert, 'gradient_checkpointing_enable'):
-        model.bert.gradient_checkpointing_enable()
+    if hasattr(model.encoder, 'gradient_checkpointing_enable'):
+        model.encoder.gradient_checkpointing_enable()
 
     # Compile model for optimization (PyTorch 2.0+)
     if args.use_compile and hasattr(torch, 'compile'):
@@ -330,45 +141,87 @@ def main():
     else:
         criterion = nn.BCEWithLogitsLoss()
 
-    optimizer = AdamW(model.parameters(), lr=args.learning_rate)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
+    scaler = GradScaler() if args.use_amp else None
 
-    total_steps = (len(train_loader) // args.gradient_accumulation_steps) * args.num_epochs
-    warmup_steps = int(total_steps * args.warmup_ratio)
-    scheduler = get_linear_schedule_with_warmup(
-        optimizer,
-        num_warmup_steps=warmup_steps,
-        num_training_steps=total_steps
-    )
+    best_f1 = 0.0
+    history = []
 
-    config = {
-        'num_epochs': args.num_epochs,
-        'learning_rate': args.learning_rate,
-        'batch_size': args.batch_size,
-        'max_grad_norm': args.max_grad_norm,
-        'threshold': args.threshold,
-        'patience': args.patience,
-        'output_dir': args.output_dir,
-        'model_name': args.model_name,
-        'use_amp': args.use_amp,
-        'gradient_accumulation_steps': args.gradient_accumulation_steps,
-        'num_workers': args.num_workers,
-        'use_compile': args.use_compile
-    }
+    for epoch in range(1, args.num_epochs + 1):
+        model.train()
+        running_loss = 0.0
+        accumulated_loss = 0.0
 
-    trainer = Trainer(model, device, train_loader, val_loader, optimizer, scheduler, criterion, config)
+        for step, batch in enumerate(tqdm(train_loader, desc=f'Epoch {epoch}/{args.num_epochs}')):
+            input_ids = batch['input_ids'].to(device)
+            attention_mask = batch['attention_mask'].to(device)
+            labels = batch['labels'].to(device)
 
-    print("Starting training...")
-    train_history, val_history = trainer.train()
+            if scaler:  # Mixed precision training
+                with autocast():
+                    logits = model(input_ids, attention_mask)
+                    loss = criterion(logits, labels)
+                    loss = loss / args.gradient_accumulation_steps
 
-    history_path = os.path.join(args.output_dir, 'training_history.json')
-    with open(history_path, 'w') as f:
-        json.dump({
-            'train': train_history,
-            'validation': val_history,
-            'config': config
-        }, f, indent=2)
+                scaler.scale(loss).backward()
+                accumulated_loss += loss.item()
 
-    print(f"Training completed. Best validation F1: {trainer.best_val_f1:.4f}")
+                if (step + 1) % args.gradient_accumulation_steps == 0:
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    scaler.step(optimizer)
+                    scaler.update()
+                    optimizer.zero_grad()
 
-if __name__ == "__main__":
+                    running_loss += accumulated_loss
+                    accumulated_loss = 0.0
+            else:  # Standard training
+                logits = model(input_ids, attention_mask)
+                loss = criterion(logits, labels)
+                loss = loss / args.gradient_accumulation_steps
+
+                loss.backward()
+                accumulated_loss += loss.item()
+
+                if (step + 1) % args.gradient_accumulation_steps == 0:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    optimizer.step()
+                    optimizer.zero_grad()
+
+                    running_loss += accumulated_loss
+                    accumulated_loss = 0.0
+
+        train_loss = running_loss / max(1, len(train_loader) // args.gradient_accumulation_steps)
+        val_overall, val_per = evaluate(model, val_loader, device, threshold=args.threshold, use_amp=args.use_amp)
+
+        history.append({
+            'epoch': epoch,
+            'train_loss': train_loss,
+            'val_overall': val_overall,
+        })
+
+        print(f"Epoch {epoch}: train_loss={train_loss:.4f} val_f1={val_overall['f1']:.4f} val_auc={val_overall['auc']}")
+
+        if val_overall['f1'] > best_f1:
+            best_f1 = val_overall['f1']
+            ckpt = {
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'config': vars(args),
+                'val_overall': val_overall,
+                'val_per_criteria': val_per,
+            }
+            torch.save(ckpt, os.path.join(args.output_dir, 'best_model.pt'))
+            with open(os.path.join(args.output_dir, 'history.json'), 'w') as f:
+                json.dump(history, f, indent=2)
+            print('Saved new best checkpoint.')
+
+    print('Evaluating on test set...')
+    test_overall, test_per = evaluate(model, test_loader, device, threshold=args.threshold, use_amp=args.use_amp)
+    with open(os.path.join(args.output_dir, 'test_metrics.json'), 'w') as f:
+        json.dump({'overall': test_overall, 'per_criteria': test_per}, f, indent=2)
+    print('Done.')
+
+
+if __name__ == '__main__':
     main()

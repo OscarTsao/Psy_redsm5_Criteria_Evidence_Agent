@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a BERT Large-based multi-label classification system for matching DSM-5 Major Depressive Disorder criteria to Reddit posts from the RedSM5 dataset. The system classifies text into 9 DSM-5 criteria (A.1 to A.9) for depression diagnosis.
+This is a BERT-based pairwise classification system for matching DSM-5 Major Depressive Disorder criteria to Reddit posts from the RedSM5 dataset. The system uses a pairwise approach with input format [CLS]post[SEP]criteria[SEP] to classify each post-criteria pair into 9 DSM-5 criteria (A.1 to A.9) for depression diagnosis.
 
 ## Essential Commands
 
@@ -17,13 +17,7 @@ pip install -r requirements.txt
 ```bash
 python test_setup.py
 ```
-This validates data loading, model initialization, and dataset creation with a small subset of data.
-
-### GPU Setup Verification
-```bash
-python test_gpu.py
-```
-This tests GPU access and CUDA functionality within the container.
+This validates pairwise data loading, model initialization, and forward pass with the cleaned structure.
 
 ### Training
 ```bash
@@ -52,32 +46,31 @@ python predict.py \
 ## Architecture Overview
 
 ### Core Components
-- **`model.py`**: BERT Large model with classification head (2-layer MLP + dropout)
-- **`data_preprocessing.py`**: Data loading, preprocessing, and dataset creation utilities
+- **`model.py`**: BERT model with pairwise classification head (2-layer MLP + dropout)
+- **`data.py`**: Pairwise data loading, preprocessing, and dataset creation utilities
 - **`train.py`**: Training pipeline with early stopping and checkpointing
 - **`predict.py`**: Inference and evaluation with detailed metrics
 
 ### Data Flow
 1. Raw data (`redsm5_posts.csv`, `redsm5_annotations.csv`) → preprocessing
 2. DSM-5 criteria mapping from JSON → symptom labels
-3. Text tokenization (max_length=512) → BERT Large embeddings
-4. Multi-label classification → 9 criterion predictions
+3. Expand to (post, criterion) pairs → tokenization as [CLS]post[SEP]criteria[SEP]
+4. BERT embeddings → pairwise binary classification for each (post, criterion) pair
 
 ### Model Architecture
-- Base: BERT Large (google-bert/bert-large-uncased-whole-word-masking-finetuned-squad)
-- Classification Head: Linear(768→256) → ReLU → Dropout → Linear(256→9)
+- Base: BERT (bert-base-uncased)
+- Classification Head: Linear(768→256) → ReLU → Dropout → Linear(256→1)
 - Loss: Binary Cross-Entropy or Focal Loss (for class imbalance)
-- Output: Sigmoid probabilities for each DSM-5 criterion
+- Output: Sigmoid probability for each (post, criterion) pair
 
 ### Key Features
-- Multi-label classification for 9 DSM-5 criteria
+- Pairwise classification for 9 DSM-5 criteria using [CLS]post[SEP]criteria[SEP] format
 - Focal loss support for imbalanced datasets
 - Early stopping with patience-based training
-- Enhanced checkpoint naming with embedded evaluation metrics
-- Comprehensive evaluation metrics (F1, AUC, Hamming loss, exact match)
-- Detailed per-case prediction outputs for human evaluation
-- Error analysis and simplified review files
-- Gradient clipping and learning rate scheduling
+- Comprehensive evaluation metrics (F1, AUC, precision, recall, accuracy)
+- Per-criterion evaluation and aggregation
+- Mixed precision training with gradient accumulation
+- Gradient clipping and model compilation support
 
 ## Data Structure
 
@@ -94,19 +87,12 @@ Data/
 ## Output Files
 
 ### Training Outputs
-- `best_model_epoch{N}_f1macro{score}_f1micro{score}_exact{score}_hamming{score}.pt`: Enhanced checkpoint with metrics in filename
-- `best_model.pt`: Generic checkpoint for compatibility
-- `training_history.json`: Per-epoch training/validation metrics
+- `best_model.pt`: Best model checkpoint based on validation F1 score
+- `history.json`: Per-epoch training/validation metrics and loss
 
 ### Evaluation Outputs
-- `predictions.csv`: Detailed per-case predictions with full text and metrics
-- `predictions_simplified.csv`: Human-readable summary for quick review
-- `predictions_errors.csv`: Only incorrect predictions for error analysis
-- `evaluation_metrics.json`: Detailed performance metrics
-- `evaluation_summary.txt`: Human-readable metrics summary
-- `evaluation_report.txt`: Comprehensive report with model and training info
-- `confusion_matrices.png`: Visualization of per-criterion confusion matrices
-- `confusion_matrices.json`: Raw confusion matrix data
+- `test_raw_pairs.json`: Raw pairwise predictions, probabilities, and labels
+- `test_metrics.json`: Overall and per-criterion evaluation metrics
 
 ## DSM-5 Criteria Mapping
 

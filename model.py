@@ -1,56 +1,36 @@
 import torch
 import torch.nn as nn
 from transformers import AutoModel, AutoConfig
-from typing import Optional, Tuple
+from typing import Tuple
 
-class BERTForDSM5Classification(nn.Module):
-    def __init__(self, model_name: str = 'google-bert/bert-large-uncased-whole-word-masking-finetuned-squad', num_criteria: int = 9, dropout: float = 0.1):
-        super(BERTForDSM5Classification, self).__init__()
-        self.num_criteria = num_criteria
 
+class BERTForPairwiseClassification(nn.Module):
+    """Binary classifier for (post, criterion) pairs with a single logit output."""
+
+    def __init__(self, model_name: str = 'bert-base-uncased', dropout: float = 0.1):
+        super().__init__()
         self.config = AutoConfig.from_pretrained(model_name)
-        self.bert = AutoModel.from_pretrained(model_name)
-
+        self.encoder = AutoModel.from_pretrained(model_name)
         self.dropout = nn.Dropout(dropout)
-
-        # Multi-binary classification head - each criterion is an independent binary classifier
         self.classifier = nn.Sequential(
             nn.Linear(self.config.hidden_size, 256),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(256, num_criteria)  # 9 independent binary classifiers
+            nn.Linear(256, 1),
         )
-
-        self.sigmoid = nn.Sigmoid()
 
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
-        outputs = self.bert(
-            input_ids=input_ids,
-            attention_mask=attention_mask
-        )
-
-        pooled_output = outputs.pooler_output
-
-        pooled_output = self.dropout(pooled_output)
-
-        logits = self.classifier(pooled_output)
-
+        outputs = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
+        pooled = outputs.pooler_output if hasattr(outputs, 'pooler_output') and outputs.pooler_output is not None else outputs.last_hidden_state[:, 0]
+        pooled = self.dropout(pooled)
+        logits = self.classifier(pooled).squeeze(-1)
         return logits
 
-    def predict(self, input_ids: torch.Tensor, attention_mask: torch.Tensor, threshold: float = 0.5) -> torch.Tensor:
-        """
-        Predict DSM-5 criteria presence for each post.
-        Each criterion is treated as an independent binary classification.
-
-        Returns:
-            predictions: Binary predictions for each criterion (batch_size, 9)
-            probs: Probability scores for each criterion (batch_size, 9)
-        """
+    def predict(self, input_ids: torch.Tensor, attention_mask: torch.Tensor, threshold: float = 0.5):
         logits = self.forward(input_ids, attention_mask)
-        probs = self.sigmoid(logits)
-        # Independent binary classification for each criterion
-        predictions = (probs > threshold).float()
-        return predictions, probs
+        probs = torch.sigmoid(logits)
+        preds = (probs > threshold).float()
+        return preds, probs
 
 class FocalLoss(nn.Module):
     def __init__(self, alpha: float = 0.25, gamma: float = 2.0, reduction: str = 'mean'):
@@ -74,13 +54,12 @@ class FocalLoss(nn.Module):
         else:
             return focal_loss
 
-def get_model(model_name: str = 'google-bert/bert-large-uncased-whole-word-masking-finetuned-squad', num_criteria: int = 9, device: str = None) -> Tuple[BERTForDSM5Classification, torch.device]:
+def get_pairwise_model(model_name: str = 'bert-base-uncased', device: str = None) -> Tuple[BERTForPairwiseClassification, torch.device]:
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     else:
         device = torch.device(device)
 
-    model = BERTForDSM5Classification(model_name, num_criteria)
+    model = BERTForPairwiseClassification(model_name)
     model = model.to(device)
-
     return model, device
