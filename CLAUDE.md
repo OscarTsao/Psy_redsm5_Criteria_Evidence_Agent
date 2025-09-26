@@ -19,28 +19,49 @@ python test_setup.py
 ```
 This validates pairwise data loading, model initialization, and forward pass with the cleaned structure.
 
-### Training
+### Training (Optimized)
 ```bash
-python train.py \
-    --posts_path Data/redsm5/redsm5_posts.csv \
-    --annotations_path Data/redsm5/redsm5_annotations.csv \
-    --criteria_path Data/DSM-5/DSM_Criteria_Array_Fixed_Major_Depressive.json \
-    --num_epochs 20 \
-    --batch_size 16 \
-    --learning_rate 2e-5 \
-    --use_focal_loss \
-    --output_dir outputs
+# Basic training with optimized defaults
+python train.py
+
+# Training with hyperparameter overrides
+python train.py training.num_epochs=50 train_loader.batch_size=32
+
+# Optuna hyperparameter optimization
+python optuna_optimize.py
+
+# Use optimized configuration from HPO
+python train.py --config-path=outputs/optimization/TIMESTAMP_study/production_config.yaml
 ```
 
-### Prediction and Evaluation
+### Prediction and Evaluation (Enhanced)
 ```bash
-python predict.py \
-    --checkpoint_path outputs/best_model.pt \
-    --posts_path Data/redsm5/redsm5_posts.csv \
-    --annotations_path Data/redsm5/redsm5_annotations.csv \
-    --criteria_path Data/DSM-5/DSM_Criteria_Array_Fixed_Major_Depressive.json \
-    --threshold 0.5 \
-    --output_dir outputs
+# Predict using best model from a training run
+python predict.py --run outputs/training/20231215_143022
+
+# Predict with specific checkpoint
+python predict.py --run outputs/training/20231215_143022 --checkpoint checkpoint_epoch_15.pt
+
+# Predict different data split
+python predict.py --run outputs/training/20231215_143022 --split val
+```
+
+### Git Workflow for Experiments
+```bash
+# Create new experiment branch
+./scripts/git_workflow.sh new-experiment focal-loss-optimization
+
+# Commit experimental changes
+./scripts/git_workflow.sh commit "Implement adaptive focal loss with early stopping"
+
+# Push experiment branch
+./scripts/git_workflow.sh push
+
+# Check project status
+./scripts/git_workflow.sh status
+
+# Clean old training outputs
+./scripts/git_workflow.sh clean-outputs
 ```
 
 ## Architecture Overview
@@ -65,12 +86,17 @@ python predict.py \
 
 ### Key Features
 - Pairwise classification for 9 DSM-5 criteria using [CLS]post[SEP]criteria[SEP] format
-- Focal loss support for imbalanced datasets
-- Early stopping with patience-based training
+- Advanced loss functions: Focal Loss, Adaptive Focal Loss, and Hybrid Loss
+- Intelligent checkpoint management (keeps only 5 most recent + best model)
+- Early stopping with configurable patience (default: 10 epochs)
+- Learning rate scheduling with ReduceLROnPlateau
 - Comprehensive evaluation metrics (F1, AUC, precision, recall, accuracy)
 - Per-criterion evaluation and aggregation
-- Mixed precision training with gradient accumulation
+- Mixed precision training with gradient accumulation and TF32 optimization
 - Gradient clipping and model compilation support
+- Optuna hyperparameter optimization with best configuration saving
+- Git-based experiment workflow management
+- Hardware optimization for CUDA, cuDNN benchmark, and bfloat16 support
 
 ## Data Structure
 
@@ -88,11 +114,19 @@ Data/
 
 ### Training Outputs
 - `best_model.pt`: Best model checkpoint based on validation F1 score
+- `checkpoint_epoch_N.pt`: Regular epoch checkpoints (max 5 kept automatically)
 - `history.json`: Per-epoch training/validation metrics and loss
 
 ### Evaluation Outputs
-- `test_raw_pairs.json`: Raw pairwise predictions, probabilities, and labels
+- `test_raw_pairs.csv`: Raw pairwise predictions with post_id as first column
 - `test_metrics.json`: Overall and per-criterion evaluation metrics
+
+### Optimization Outputs
+- `outputs/optimization/TIMESTAMP_study/`: Optuna study results
+  - `best_config.yaml`: Best hyperparameter configuration
+  - `production_config.yaml`: Production-ready configuration
+  - `optimization_results.json`: Complete optimization history
+  - `best_trial_artifacts/`: Best model and training outputs
 
 ## DSM-5 Criteria Mapping
 
