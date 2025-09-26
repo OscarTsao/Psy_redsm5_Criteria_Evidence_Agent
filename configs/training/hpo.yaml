@@ -1,0 +1,62 @@
+# Optuna sweep configuration overrides
+
+defaults:
+  - default
+  - _self_
+
+optuna:
+  enabled: true
+  n_trials: 30
+  direction: maximize
+  timeout: null
+  seed: 42
+  study_name: pure_adaptive_focal_hpo
+  storage: null # e.g., sqlite:///optuna.db
+  load_if_exists: true
+
+search_space:
+  train_batch_size:
+    method: categorical
+    choices: [32, 48, 64, 96, 128, 256]
+  eval_batch_size:
+    method: categorical
+    choices: [32, 48, 64, 96, 128, 256]
+  learning_rate:
+    method: loguniform
+    low: 1e-06
+    high: 5e-05
+  weight_decay:
+    method: loguniform
+    low: 1e-06
+    high: 1e-02
+  alpha:
+    method: uniform
+    low: 0.1
+    high: 0.5
+  gamma:
+    method: uniform
+    low: 1.0
+    high: 4.0
+  delta:
+    method: uniform
+    low: 0.5
+    high: 2.0
+  dropout:
+    method: uniform
+    low: 0.0
+    high: 0.4
+  clip_grad_norm:
+    method: uniform
+    low: 0.5
+    high: 2.0
+  threshold:
+    method: uniform
+    low: 0.1
+    high: 0.9
+  gradient_accumulation_steps:
+    method: categorical
+    choices: [1, 2, 4]
+
+hydra:
+  sweep:
+    dir: outputs/training/optuna/${now:%Y%m%d_%H%M%S}

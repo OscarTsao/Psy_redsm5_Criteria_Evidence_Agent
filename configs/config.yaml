@@ -1,0 +1,11 @@
+defaults:
+  - training: default
+  - _self_
+
+hydra:
+  run:
+    dir: outputs/training/${now:%Y%m%d_%H%M%S}
+  sweep:
+    dir: outputs/training/multirun/${now:%Y%m%d_%H%M%S}
+
+seed: 42

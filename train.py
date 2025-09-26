@@ -1,21 +1,28 @@
-import argparse
+from __future__ import annotations
+
 import json
 import os
+import glob
+from datetime import datetime
+from pathlib import Path
 from typing import Dict
 
+import hydra
 import numpy as np
+import optuna
 import torch
-import torch.nn as nn
-from torch.cuda.amp import GradScaler, autocast
+from hydra.utils import instantiate
+from omegaconf import DictConfig, OmegaConf
+from torch.cuda.amp import GradScaler
 from sklearn.metrics import precision_recall_fscore_support, roc_auc_score, accuracy_score
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from model import BERTForPairwiseClassification, get_pairwise_model, FocalLoss
-from data import make_pairwise_datasets, load_dsm5_criteria
+from data import make_pairwise_datasets
 
 
-def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray, y_prob: np.ndarray) -> Dict:
+
+def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray, y_prob: np.ndarray) -> Dict[str, float]:
     precision, recall, f1, _ = precision_recall_fscore_support(y_true, y_pred, average='binary', zero_division=0)
     try:
         auc = roc_auc_score(y_true, y_prob)
@@ -42,7 +49,7 @@ def evaluate(model, loader, device, threshold: float = 0.5, use_amp: bool = True
             cidx = batch['criterion_idx'].cpu().numpy()
 
             if use_amp:
-                with autocast():
+                with autocast_context(use_amp, torch.float16):
                     logits = model(input_ids, attention_mask)
             else:
                 logits = model(input_ids, attention_mask)
@@ -72,155 +79,401 @@ def evaluate(model, loader, device, threshold: float = 0.5, use_amp: bool = True
     return overall, per_criteria
 
 
-def main():
-    parser = argparse.ArgumentParser(description='Train BERT for DSM-5 criteria matching (pairwise).')
-    parser.add_argument('--posts_path', type=str, default='Data/redsm5/redsm5_posts.csv')
-    parser.add_argument('--annotations_path', type=str, default='Data/redsm5/redsm5_annotations.csv')
-    parser.add_argument('--criteria_path', type=str, default='Data/DSM-5/DSM_Criteria_Array_Fixed_Major_Depressive.json')
-    parser.add_argument('--model_name', type=str, default='bert-base-uncased')
-    parser.add_argument('--batch_size', type=int, default=16)
-    parser.add_argument('--num_epochs', type=int, default=200)
-    parser.add_argument('--learning_rate', type=float, default=2e-5)
-    parser.add_argument('--threshold', type=float, default=0.5)
-    parser.add_argument('--use_focal_loss', action='store_true')
-    parser.add_argument('--use_amp', action='store_true', default=True, help='Use Automatic Mixed Precision')
-    parser.add_argument('--gradient_accumulation_steps', type=int, default=1, help='Number of steps to accumulate gradients')
-    parser.add_argument('--num_workers', type=int, default=4, help='Number of data loading workers')
-    parser.add_argument('--use_compile', action='store_true', help='Use torch.compile for optimization')
-    parser.add_argument('--output_dir', type=str, default='outputs')
-    parser.add_argument('--seed', type=int, default=42)
+def seed_everything(seed: int) -> None:
+    import random
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
-    args = parser.parse_args()
-    os.makedirs(args.output_dir, exist_ok=True)
 
-    torch.manual_seed(args.seed)
-    np.random.seed(args.seed)
+def build_dataloaders(train_ds, val_ds, test_ds, cfg):
+    def make_loader(ds, params, fallback_shuffle=False):
+        batch_size = params.batch_size
+        num_workers = params.num_workers
+        if num_workers is None:
+            num_workers = max(4, os.cpu_count() or 4)
 
-    print('Building datasets...')
-    train_ds, val_ds, test_ds, criteria_map = make_pairwise_datasets(
-        args.posts_path, args.annotations_path, args.criteria_path, tokenizer_name=args.model_name
-    )
+        shuffle = params.get("shuffle", fallback_shuffle)
+        drop_last = params.get("drop_last", False)
+        prefetch_factor = params.get("prefetch_factor", None)
+        persistent_workers = params.get("persistent_workers", False)
 
-    train_loader = DataLoader(
-        train_ds,
-        batch_size=args.batch_size,
-        shuffle=True,
-        num_workers=args.num_workers,
-        pin_memory=True,
-        persistent_workers=True if args.num_workers > 0 else False
-    )
-    val_loader = DataLoader(
-        val_ds,
-        batch_size=args.batch_size,
-        num_workers=args.num_workers,
-        pin_memory=True,
-        persistent_workers=True if args.num_workers > 0 else False
-    )
-    test_loader = DataLoader(
-        test_ds,
-        batch_size=args.batch_size,
-        num_workers=args.num_workers,
-        pin_memory=True,
-        persistent_workers=True if args.num_workers > 0 else False
-    )
+        loader_kwargs = {
+            "batch_size": batch_size,
+            "shuffle": shuffle,
+            "num_workers": num_workers,
+            "pin_memory": params.get("pin_memory", True),
+            "persistent_workers": persistent_workers and num_workers > 0,
+            "drop_last": drop_last,
+        }
+        if prefetch_factor is not None:
+            loader_kwargs["prefetch_factor"] = prefetch_factor
 
-    print('Initializing model...')
-    model, device = get_pairwise_model(args.model_name)
+        return DataLoader(ds, **loader_kwargs)
 
-    # Enable gradient checkpointing for memory efficiency
-    if hasattr(model.encoder, 'gradient_checkpointing_enable'):
-        model.encoder.gradient_checkpointing_enable()
+    train_loader = make_loader(train_ds, cfg.train_loader, fallback_shuffle=True)
+    val_loader = make_loader(val_ds, cfg.val_loader)
+    test_loader = make_loader(test_ds, cfg.test_loader)
+    return train_loader, val_loader, test_loader
 
-    # Compile model for optimization (PyTorch 2.0+)
-    if args.use_compile and hasattr(torch, 'compile'):
-        print("Compiling model with torch.compile...")
-        model = torch.compile(model, mode='max-autotune')
 
-    if args.use_focal_loss:
-        criterion = FocalLoss()
-    else:
-        criterion = nn.BCEWithLogitsLoss()
+def autocast_context(use_amp: bool, dtype: torch.dtype):
+    if not use_amp:
+        return torch.autocast(device_type="cuda" if torch.cuda.is_available() else "cpu", dtype=dtype, enabled=False)
+    return torch.autocast(device_type="cuda" if torch.cuda.is_available() else "cpu", dtype=dtype)
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
-    scaler = GradScaler() if args.use_amp else None
 
-    best_f1 = 0.0
-    history = []
+def forward_loss(model, batch, criterion, device, use_amp=False, amp_dtype=torch.float16):
+    input_ids = batch['input_ids'].to(device)
+    attention_mask = batch['attention_mask'].to(device)
+    labels = batch['labels'].to(device)
 
-    for epoch in range(1, args.num_epochs + 1):
-        model.train()
-        running_loss = 0.0
-        accumulated_loss = 0.0
+    with autocast_context(use_amp, amp_dtype):
+        logits = model(input_ids, attention_mask)
+        loss = criterion(logits, labels)
+    return loss, logits
 
-        for step, batch in enumerate(tqdm(train_loader, desc=f'Epoch {epoch}/{args.num_epochs}')):
+
+def train_one_epoch(
+    model,
+    train_loader,
+    optimizer,
+    criterion,
+    device,
+    gradient_accumulation_steps,
+    clip_grad_norm,
+    use_amp,
+    scaler,
+    amp_dtype,
+):
+    model.train()
+    running_loss = 0.0
+    accumulated_loss = 0.0
+
+    optimizer.zero_grad()
+    for step, batch in enumerate(tqdm(train_loader, desc='Train', leave=False)):
+        loss, _ = forward_loss(model, batch, criterion, device, use_amp, amp_dtype)
+        loss = loss / gradient_accumulation_steps
+
+        if scaler and use_amp:
+            scaler.scale(loss).backward()
+        else:
+            loss.backward()
+
+        accumulated_loss += loss.item()
+
+        if (step + 1) % gradient_accumulation_steps == 0:
+            if scaler and use_amp:
+                scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad_norm)
+            if scaler and use_amp:
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                optimizer.step()
+            optimizer.zero_grad()
+
+            running_loss += accumulated_loss
+            accumulated_loss = 0.0
+
+    total_steps = max(1, len(train_loader) // gradient_accumulation_steps)
+    return running_loss / total_steps
+
+
+def evaluate_model(model, loader, device, threshold: float = 0.5, use_amp: bool = True, amp_dtype=torch.float16):
+    model.eval()
+    all_y, all_pred, all_prob, all_cidx = [], [], [], []
+    with torch.no_grad():
+        for batch in tqdm(loader, desc='Eval', leave=False):
             input_ids = batch['input_ids'].to(device)
             attention_mask = batch['attention_mask'].to(device)
             labels = batch['labels'].to(device)
+            cidx = batch['criterion_idx'].cpu().numpy()
 
-            if scaler:  # Mixed precision training
-                with autocast():
-                    logits = model(input_ids, attention_mask)
-                    loss = criterion(logits, labels)
-                    loss = loss / args.gradient_accumulation_steps
-
-                scaler.scale(loss).backward()
-                accumulated_loss += loss.item()
-
-                if (step + 1) % args.gradient_accumulation_steps == 0:
-                    scaler.unscale_(optimizer)
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                    scaler.step(optimizer)
-                    scaler.update()
-                    optimizer.zero_grad()
-
-                    running_loss += accumulated_loss
-                    accumulated_loss = 0.0
-            else:  # Standard training
+            with autocast_context(use_amp, amp_dtype):
                 logits = model(input_ids, attention_mask)
-                loss = criterion(logits, labels)
-                loss = loss / args.gradient_accumulation_steps
 
-                loss.backward()
-                accumulated_loss += loss.item()
+            probs = torch.sigmoid(logits)
+            preds = (probs > threshold).float()
 
-                if (step + 1) % args.gradient_accumulation_steps == 0:
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                    optimizer.step()
-                    optimizer.zero_grad()
+            all_y.append(labels.cpu().numpy())
+            all_pred.append(preds.cpu().numpy())
+            all_prob.append(probs.cpu().numpy())
+            all_cidx.append(cidx)
 
-                    running_loss += accumulated_loss
-                    accumulated_loss = 0.0
+    y = np.concatenate(all_y)
+    y_hat = np.concatenate(all_pred)
+    y_prob = np.concatenate(all_prob)
+    cidx = np.concatenate(all_cidx)
 
-        train_loss = running_loss / max(1, len(train_loader) // args.gradient_accumulation_steps)
-        val_overall, val_per = evaluate(model, val_loader, device, threshold=args.threshold, use_amp=args.use_amp)
+    overall = compute_metrics(y, y_hat, y_prob)
+
+    per_criteria = []
+    for i in range(9):
+        subset = cidx == i
+        if subset.any():
+            m = compute_metrics(y[subset], y_hat[subset], y_prob[subset])
+        else:
+            m = {k: float('nan') for k in ['precision', 'recall', 'f1', 'auc', 'accuracy']}
+        m['criteria_idx'] = i
+        per_criteria.append(m)
+
+    return overall, per_criteria
+
+
+def cleanup_old_checkpoints(output_dir: Path, max_checkpoints: int = 5):
+    """Keep only the most recent checkpoints, excluding best_model.pt"""
+    checkpoint_pattern = str(output_dir / 'checkpoint_epoch_*.pt')
+    checkpoints = glob.glob(checkpoint_pattern)
+
+    if len(checkpoints) > max_checkpoints:
+        # Sort by modification time (oldest first)
+        checkpoints.sort(key=lambda x: os.path.getmtime(x))
+        # Remove oldest checkpoints
+        for old_checkpoint in checkpoints[:-max_checkpoints]:
+            try:
+                os.remove(old_checkpoint)
+                print(f"Removed old checkpoint: {os.path.basename(old_checkpoint)}")
+            except OSError as e:
+                print(f"Warning: Could not remove {old_checkpoint}: {e}")
+
+
+def save_history_and_checkpoint(
+    output_dir: Path,
+    model,
+    optimizer,
+    cfg,
+    history,
+    metrics,
+    epoch,
+    best: bool = False,
+    max_checkpoints: int = 5,
+):
+    ckpt = {
+        'epoch': epoch,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'config': OmegaConf.to_container(cfg, resolve=True),
+        'metrics': metrics,
+        'history': history,
+    }
+
+    if best:
+        ckpt_name = output_dir / 'best_model.pt'
+    else:
+        ckpt_name = output_dir / f'checkpoint_epoch_{epoch}.pt'
+        # Clean up old checkpoints after saving the new one
+        torch.save(ckpt, ckpt_name)
+        cleanup_old_checkpoints(output_dir, max_checkpoints)
+
+    if best:
+        torch.save(ckpt, ckpt_name)
+
+    history_path = output_dir / 'history.json'
+    with open(history_path, 'w') as f:
+        json.dump(history, f, indent=2)
+
+
+def extract_config(cfg: DictConfig) -> DictConfig:
+    if 'posts_path' in cfg:
+        return cfg
+    if 'training' in cfg and isinstance(cfg.training, DictConfig):
+        return cfg.training
+    raise ValueError("Configuration missing required keys (posts_path, training, etc.)")
+
+
+def run_training(cfg: DictConfig) -> float:
+    trial = cfg.get("trial")
+    if trial is not None:
+        OmegaConf.set_struct(cfg, False)
+        apply_trial_suggestions(cfg, trial)
+        OmegaConf.set_struct(cfg, True)
+
+    seed = cfg.get('seed', 42)
+    seed_everything(seed)
+
+    output_dir = ensure_output_dir(cfg)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Store output directory in trial for artifact copying
+    if trial is not None:
+        trial.set_user_attr('output_dir', str(output_dir))
+
+    train_ds, val_ds, test_ds, _ = make_pairwise_datasets(
+        cfg.posts_path,
+        cfg.annotations_path,
+        cfg.criteria_path,
+        tokenizer_name=cfg.model.model_name,
+        seed=seed,
+    )
+
+    model, device = instantiate(cfg.model)
+    if cfg.training.get("use_grad_checkpointing", False) and hasattr(model.encoder, 'gradient_checkpointing_enable'):
+        model.encoder.gradient_checkpointing_enable()
+
+    if cfg.training.use_compile and hasattr(torch, 'compile'):
+        model = torch.compile(model)
+
+    criterion = instantiate(cfg.loss)
+
+    optimizer = instantiate(cfg.optimizer, params=model.parameters())
+    scheduler = instantiate(cfg.scheduler, optimizer=optimizer) if cfg.scheduler else None
+
+    train_loader, val_loader, test_loader = build_dataloaders(train_ds, val_ds, test_ds, cfg)
+
+    scaler = GradScaler(enabled=cfg.training.use_amp)
+
+    best_metric = -float('inf')
+    history = []
+    patience_counter = 0
+    early_stopping_patience = cfg.training.get('early_stopping_patience', 10)
+
+    amp_dtype = getattr(torch, cfg.training.amp_dtype) if isinstance(cfg.training.amp_dtype, str) else cfg.training.amp_dtype
+
+    for epoch in range(1, cfg.training.num_epochs + 1):
+        train_loss = train_one_epoch(
+            model,
+            train_loader,
+            optimizer,
+            criterion,
+            device,
+            cfg.training.gradient_accumulation_steps,
+            cfg.training.clip_grad_norm,
+            cfg.training.use_amp,
+            scaler,
+            amp_dtype,
+        )
+
+        val_metrics, val_per = evaluate_model(
+            model,
+            val_loader,
+            device,
+            threshold=cfg.training.threshold,
+            use_amp=cfg.training.use_amp,
+            amp_dtype=amp_dtype,
+        )
+
+        if scheduler:
+            if hasattr(scheduler, 'step') and 'ReduceLROnPlateau' in str(type(scheduler)):
+                scheduler.step(val_metrics.get(cfg.monitor_metric, 0.0))
+            else:
+                scheduler.step()
 
         history.append({
             'epoch': epoch,
             'train_loss': train_loss,
-            'val_overall': val_overall,
+            'val_overall': val_metrics,
         })
 
-        print(f"Epoch {epoch}: train_loss={train_loss:.4f} val_f1={val_overall['f1']:.4f} val_auc={val_overall['auc']}")
+        metric_value = val_metrics.get(cfg.monitor_metric, 0.0)
+        is_best = metric_value > best_metric
+        if is_best:
+            best_metric = metric_value
+            patience_counter = 0
+        else:
+            patience_counter += 1
 
-        if val_overall['f1'] > best_f1:
-            best_f1 = val_overall['f1']
-            ckpt = {
-                'epoch': epoch,
-                'model_state_dict': model.state_dict(),
-                'config': vars(args),
-                'val_overall': val_overall,
+        metrics_payload = {
+            'train_loss': train_loss,
+            'val_overall': val_metrics,
                 'val_per_criteria': val_per,
             }
-            torch.save(ckpt, os.path.join(args.output_dir, 'best_model.pt'))
-            with open(os.path.join(args.output_dir, 'history.json'), 'w') as f:
-                json.dump(history, f, indent=2)
-            print('Saved new best checkpoint.')
+        max_checkpoints = cfg.training.get('max_checkpoints', 5)
+        save_history_and_checkpoint(output_dir, model, optimizer, cfg, history, metrics_payload, epoch, best=is_best, max_checkpoints=max_checkpoints)
 
-    print('Evaluating on test set...')
-    test_overall, test_per = evaluate(model, test_loader, device, threshold=args.threshold, use_amp=args.use_amp)
-    with open(os.path.join(args.output_dir, 'test_metrics.json'), 'w') as f:
-        json.dump({'overall': test_overall, 'per_criteria': test_per}, f, indent=2)
-    print('Done.')
+        status = f"Epoch {epoch}: train_loss={train_loss:.4f} val_{cfg.monitor_metric}={metric_value:.4f}"
+        if is_best:
+            status += " (new best)"
+        else:
+            status += f" (patience: {patience_counter}/{early_stopping_patience})"
+        print(status)
+
+        # Early stopping check
+        if patience_counter >= early_stopping_patience:
+            print(f"Early stopping triggered after {epoch} epochs (patience: {early_stopping_patience})")
+            break
+
+    test_metrics, test_per = evaluate_model(
+        model,
+        test_loader,
+        device,
+        threshold=cfg.training.threshold,
+        use_amp=cfg.training.use_amp,
+        amp_dtype=amp_dtype,
+    )
+    with open(output_dir / 'test_metrics.json', 'w') as f:
+        json.dump({'overall': test_metrics, 'per_criteria': test_per}, f, indent=2)
+
+    return best_metric
+
+
+def apply_trial_suggestions(cfg: DictConfig, trial: optuna.Trial) -> None:
+    search_space = cfg.get("search_space")
+    if not search_space:
+        return
+
+    for param_name, space_cfg in search_space.items():
+        suggestion = sampler_dispatch(trial, param_name, space_cfg)
+
+        if param_name == "train_batch_size":
+            cfg.train_loader.batch_size = int(suggestion)
+        elif param_name == "eval_batch_size":
+            cfg.eval_batch_size = int(suggestion)
+            cfg.val_loader.batch_size = int(suggestion)
+            cfg.test_loader.batch_size = int(suggestion)
+        elif param_name == "learning_rate":
+            cfg.optimizer.lr = float(suggestion)
+        elif param_name == "weight_decay":
+            cfg.optimizer.weight_decay = float(suggestion)
+        elif param_name == "alpha":
+            cfg.loss.alpha = float(suggestion)
+        elif param_name == "gamma":
+            cfg.loss.gamma = float(suggestion)
+        elif param_name == "delta":
+            cfg.loss.delta = float(suggestion)
+        elif param_name == "dropout":
+            cfg.model.dropout = float(suggestion)
+        elif param_name == "clip_grad_norm":
+            cfg.training.clip_grad_norm = float(suggestion)
+        elif param_name == "threshold":
+            cfg.training.threshold = float(suggestion)
+        elif param_name == "gradient_accumulation_steps":
+            cfg.training.gradient_accumulation_steps = int(suggestion)
+        else:
+            # For unexpected parameters, try to set directly if they exist
+            if hasattr(cfg, param_name):
+                setattr(cfg, param_name, suggestion)
+
+def sampler_dispatch(trial: optuna.Trial, name: str, space_cfg: DictConfig):
+    method = space_cfg.method
+    if method == 'uniform':
+        return trial.suggest_float(name, space_cfg.low, space_cfg.high)
+    if method == 'loguniform':
+        return trial.suggest_float(name, space_cfg.low, space_cfg.high, log=True)
+    if method == 'int':
+        return trial.suggest_int(name, space_cfg.low, space_cfg.high)
+    if method == 'categorical':
+        return trial.suggest_categorical(name, space_cfg.choices)
+    raise ValueError(f"Unsupported sampling method: {method}")
+
+
+def ensure_output_dir(cfg: DictConfig) -> Path:
+    if 'hydra' in cfg and 'run' in cfg.hydra and 'dir' in cfg.hydra.run:
+        return Path(cfg.hydra.run.dir)
+    base_dir = cfg.get('output_dir', 'outputs')
+    run_dir = Path(base_dir) / datetime.now().strftime("%Y%m%d_%H%M%S")
+    return run_dir
+
+
+@hydra.main(version_base=None, config_path='configs', config_name='config')
+def main(cfg: DictConfig) -> None:
+    print("Configuration:\n" + OmegaConf.to_yaml(cfg))
+    # allow setting seed on structured config
+    OmegaConf.set_struct(cfg.training, False)
+    cfg.training.seed = cfg.get('seed', 42)
+    OmegaConf.set_struct(cfg.training, True)
+    run_training(cfg.training)
 
 
 if __name__ == '__main__':
