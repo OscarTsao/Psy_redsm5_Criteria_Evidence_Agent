@@ -22,10 +22,43 @@ from omegaconf import DictConfig, OmegaConf
 from train import run_training
 
 
+def run_training_with_trial(cfg: DictConfig, trial) -> float:
+    """Wrapper for run_training that handles trial injection."""
+    # Use object.__setattr__ to bypass OmegaConf's restrictions
+    object.__setattr__(cfg, '_trial_obj', trial)
+
+    # Store the original get method
+    original_get = cfg.get
+
+    # Create a custom get method that handles trial
+    def custom_get(key, default_value=None):
+        if key == 'trial':
+            return getattr(cfg, '_trial_obj', None)
+        return original_get(key, default_value)
+
+    # Monkey-patch the get method using object.__setattr__
+    object.__setattr__(cfg, 'get', custom_get)
+
+    try:
+        return run_training(cfg)
+    finally:
+        # Restore original get method
+        object.__setattr__(cfg, 'get', original_get)
+        if hasattr(cfg, '_trial_obj'):
+            object.__delattr__(cfg, '_trial_obj')
+
+
 def create_study_and_optimize(cfg: DictConfig) -> tuple[optuna.Study, float]:
     """Create Optuna study and run optimization."""
 
-    optuna_cfg = cfg.optuna
+    # Find optuna config - could be at top level or under training
+    if 'optuna' in cfg:
+        optuna_cfg = cfg.optuna
+    elif 'training' in cfg and 'optuna' in cfg.training:
+        optuna_cfg = cfg.training.optuna
+    else:
+        raise ValueError("No optuna configuration found")
+
     study_name = optuna_cfg.get('study_name', f'hpo_{datetime.now().strftime("%Y%m%d_%H%M%S")}')
 
     # Create study
@@ -39,13 +72,15 @@ def create_study_and_optimize(cfg: DictConfig) -> tuple[optuna.Study, float]:
     # Set up objective function
     def objective(trial: optuna.Trial) -> float:
         # Create a copy of the config for this trial
-        trial_cfg = OmegaConf.copy(cfg)
-        trial_cfg.trial = trial
+        trial_cfg = OmegaConf.create(OmegaConf.to_container(cfg, resolve=True))
 
+        # Modify run_training to accept trial separately
         try:
-            return run_training(trial_cfg)
+            return run_training_with_trial(trial_cfg, trial)
         except Exception as e:
             print(f"Trial {trial.number} failed: {e}")
+            import traceback
+            traceback.print_exc()
             raise optuna.exceptions.TrialPruned()
 
     # Run optimization
@@ -66,7 +101,7 @@ def save_best_configuration(study: optuna.Study, base_cfg: DictConfig, output_di
     best_params = best_trial.params
 
     # Create optimized config by applying best parameters
-    optimized_cfg = OmegaConf.copy(base_cfg)
+    optimized_cfg = OmegaConf.create(OmegaConf.to_container(base_cfg, resolve=True))
     OmegaConf.set_struct(optimized_cfg, False)
 
     # Apply best parameters
@@ -136,7 +171,7 @@ def save_best_configuration(study: optuna.Study, base_cfg: DictConfig, output_di
 
     # Create a ready-to-use config file for production
     production_config_path = output_dir / "production_config.yaml"
-    production_cfg = OmegaConf.copy(optimized_cfg)
+    production_cfg = OmegaConf.create(OmegaConf.to_container(optimized_cfg, resolve=True))
 
     # Adjust for production settings
     production_cfg.training.num_epochs = 50  # Reasonable default
@@ -172,21 +207,31 @@ def copy_best_trial_artifacts(study: optuna.Study, optimization_dir: Path) -> Op
 def main(cfg: DictConfig) -> None:
     """Main optimization entry point."""
 
-    # Extract training config
-    if 'training' in cfg:
-        training_cfg = cfg.training
-    else:
-        training_cfg = cfg
+    # Check if optuna is enabled (could be at top level or under training)
+    optuna_cfg = None
+    if 'optuna' in cfg:
+        optuna_cfg = cfg.optuna
+    elif 'training' in cfg and 'optuna' in cfg.training:
+        optuna_cfg = cfg.training.optuna
 
-    # Ensure optuna is enabled
-    if not training_cfg.optuna.get('enabled', False):
+    if not optuna_cfg or not optuna_cfg.get('enabled', False):
         print("❌ Optuna optimization is not enabled in the config.")
         print("Set 'optuna.enabled: true' in your config file.")
+        print(f"Use: python optuna_optimize.py --config-path configs/training --config-name hpo")
         return
+
+    # For HPO configs, the structure is flat - pass the whole config to run_training
+    # For regular configs, extract the training section
+    if 'training' in cfg and 'optuna' not in cfg:
+        # Standard config structure with nested training
+        training_cfg = cfg.training
+    else:
+        # HPO config structure - optuna and training params are at top level
+        training_cfg = cfg
 
     # Create optimization output directory
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    study_name = training_cfg.optuna.get('study_name', 'optimization')
+    study_name = optuna_cfg.get('study_name', 'optimization')
     optimization_dir = Path(f"outputs/optimization/{timestamp}_{study_name}")
     optimization_dir.mkdir(parents=True, exist_ok=True)
 
@@ -196,8 +241,8 @@ def main(cfg: DictConfig) -> None:
 
     print(f"🚀 Starting Optuna optimization...")
     print(f"📁 Output directory: {optimization_dir}")
-    print(f"🎯 Direction: {training_cfg.optuna.direction}")
-    print(f"🔄 Number of trials: {training_cfg.optuna.n_trials}")
+    print(f"🎯 Direction: {optuna_cfg.direction}")
+    print(f"🔄 Number of trials: {optuna_cfg.n_trials}")
 
     # Run optimization
     study, best_value = create_study_and_optimize(training_cfg)
