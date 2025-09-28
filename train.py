@@ -400,6 +400,14 @@ def run_training(cfg: DictConfig) -> float:
             status += f" (patience: {patience_counter}/{early_stopping_patience})"
         print(status)
 
+        # Optuna pruning check
+        trial = cfg.get('trial')
+        if trial is not None:
+            trial.report(metric_value, epoch)
+            if trial.should_prune():
+                print(f"Trial pruned at epoch {epoch}")
+                raise optuna.exceptions.TrialPruned()
+
         # Early stopping check
         if patience_counter >= early_stopping_patience:
             print(f"Early stopping triggered after {epoch} epochs (patience: {early_stopping_patience})")

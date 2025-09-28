@@ -62,12 +62,36 @@ def create_study_and_optimize(cfg: DictConfig) -> tuple[optuna.Study, float]:
 
     study_name = optuna_cfg.get('study_name', f'hpo_{datetime.now().strftime("%Y%m%d_%H%M%S")}')
 
+    # Configure pruner if specified
+    pruner = None
+    if optuna_cfg.get('pruning', {}).get('enabled', False):
+        pruning_cfg = optuna_cfg.pruning
+        pruner_type = pruning_cfg.get('pruner', 'MedianPruner')
+
+        if pruner_type == 'MedianPruner':
+            pruner = optuna.pruners.MedianPruner(
+                n_startup_trials=pruning_cfg.get('n_startup_trials', 10),
+                n_warmup_steps=pruning_cfg.get('n_warmup_steps', 5),
+                interval_steps=pruning_cfg.get('interval_steps', 1)
+            )
+        elif pruner_type == 'SuccessiveHalvingPruner':
+            pruner = optuna.pruners.SuccessiveHalvingPruner()
+        elif pruner_type == 'HyperbandPruner':
+            pruner = optuna.pruners.HyperbandPruner()
+
+        print(f"🔧 Using pruner: {pruner_type}")
+        if hasattr(pruner, 'n_startup_trials'):
+            print(f"   - Startup trials: {pruner.n_startup_trials}")
+        if hasattr(pruner, 'n_warmup_steps'):
+            print(f"   - Warmup steps: {pruner.n_warmup_steps}")
+
     # Create study
     study = optuna.create_study(
         study_name=study_name,
         direction=optuna_cfg.direction,
         storage=optuna_cfg.get('storage'),
         load_if_exists=optuna_cfg.get('load_if_exists', True),
+        pruner=pruner,
     )
 
     # Set up objective function
@@ -125,6 +149,41 @@ def save_best_configuration(study: optuna.Study, base_cfg: DictConfig, output_di
             optimized_cfg.training.threshold = float(value)
         elif param_name == "gradient_accumulation_steps":
             optimized_cfg.training.gradient_accumulation_steps = int(value)
+        elif param_name == "early_stopping_patience":
+            optimized_cfg.training.early_stopping_patience = int(value)
+        elif param_name == "use_gradient_checkpointing":
+            optimized_cfg.training.use_grad_checkpointing = bool(value)
+        elif param_name == "max_steps_per_epoch":
+            optimized_cfg.training.max_steps_per_epoch = value if value != "null" else None
+        # Optimizer configuration
+        elif param_name == "optimizer_type":
+            if value == "adamw":
+                optimized_cfg.optimizer._target_ = "torch.optim.AdamW"
+            elif value == "adam":
+                optimized_cfg.optimizer._target_ = "torch.optim.Adam"
+            elif value == "rmsprop":
+                optimized_cfg.optimizer._target_ = "torch.optim.RMSprop"
+        elif param_name in ["beta1", "beta2", "eps"]:
+            if param_name not in optimized_cfg.optimizer:
+                optimized_cfg.optimizer[param_name] = float(value)
+            else:
+                optimized_cfg.optimizer[param_name] = float(value)
+        # Scheduler configuration
+        elif param_name == "scheduler_type":
+            if value == "plateau":
+                optimized_cfg.scheduler._target_ = "torch.optim.lr_scheduler.ReduceLROnPlateau"
+                optimized_cfg.scheduler.mode = "max"
+            elif value == "cosine":
+                optimized_cfg.scheduler._target_ = "torch.optim.lr_scheduler.CosineAnnealingLR"
+            elif value == "linear":
+                optimized_cfg.scheduler._target_ = "torch.optim.lr_scheduler.LinearLR"
+            elif value == "exponential":
+                optimized_cfg.scheduler._target_ = "torch.optim.lr_scheduler.ExponentialLR"
+        elif param_name in ["scheduler_patience", "scheduler_factor", "warmup_steps"]:
+            if param_name not in optimized_cfg.scheduler:
+                optimized_cfg.scheduler[param_name.replace('scheduler_', '')] = value
+            else:
+                optimized_cfg.scheduler[param_name.replace('scheduler_', '')] = value
         # Loss function specific parameters
         elif param_name == "loss_function":
             optimized_cfg.loss._target_ = "model.DynamicLossFactory.create_loss"
