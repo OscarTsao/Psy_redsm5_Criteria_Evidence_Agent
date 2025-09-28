@@ -19,6 +19,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from data import make_pairwise_datasets
+from model import DynamicLossFactory, optimize_hardware_settings
 
 
 
@@ -284,6 +285,10 @@ def extract_config(cfg: DictConfig) -> DictConfig:
 
 
 def run_training(cfg: DictConfig) -> float:
+    # Apply hardware optimizations first
+    from model import optimize_hardware_settings
+    optimize_hardware_settings()
+
     trial = cfg.get("trial")
     if trial is not None:
         OmegaConf.set_struct(cfg, False)
@@ -315,7 +320,13 @@ def run_training(cfg: DictConfig) -> float:
     if cfg.training.use_compile and hasattr(torch, 'compile'):
         model = torch.compile(model)
 
-    criterion = instantiate(cfg.loss)
+    # Enhanced loss function instantiation with dynamic factory support
+    if hasattr(cfg.loss, 'loss_type'):
+        from model import DynamicLossFactory
+        loss_params = {k: v for k, v in cfg.loss.items() if k not in ['_target_', 'loss_type']}
+        criterion = DynamicLossFactory.create_loss(cfg.loss.loss_type, **loss_params)
+    else:
+        criterion = instantiate(cfg.loss)
 
     optimizer = instantiate(cfg.optimizer, params=model.parameters())
     scheduler = instantiate(cfg.scheduler, optimizer=optimizer) if cfg.scheduler else None
@@ -426,12 +437,6 @@ def apply_trial_suggestions(cfg: DictConfig, trial: optuna.Trial) -> None:
             cfg.optimizer.lr = float(suggestion)
         elif param_name == "weight_decay":
             cfg.optimizer.weight_decay = float(suggestion)
-        elif param_name == "alpha":
-            cfg.loss.alpha = float(suggestion)
-        elif param_name == "gamma":
-            cfg.loss.gamma = float(suggestion)
-        elif param_name == "delta":
-            cfg.loss.delta = float(suggestion)
         elif param_name == "dropout":
             cfg.model.dropout = float(suggestion)
         elif param_name == "clip_grad_norm":
@@ -440,6 +445,16 @@ def apply_trial_suggestions(cfg: DictConfig, trial: optuna.Trial) -> None:
             cfg.training.threshold = float(suggestion)
         elif param_name == "gradient_accumulation_steps":
             cfg.training.gradient_accumulation_steps = int(suggestion)
+        # Loss function type selection
+        elif param_name == "loss_function":
+            cfg.loss._target_ = f"model.DynamicLossFactory.create_loss"
+            cfg.loss.loss_type = suggestion
+        # Loss function parameters
+        elif param_name in ["alpha", "gamma", "delta", "bce_weight", "pos_weight"]:
+            if not hasattr(cfg.loss, param_name):
+                setattr(cfg.loss, param_name, suggestion)
+            else:
+                cfg.loss[param_name] = suggestion
         else:
             # For unexpected parameters, try to set directly if they exist
             if hasattr(cfg, param_name):

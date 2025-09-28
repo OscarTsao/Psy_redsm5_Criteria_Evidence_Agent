@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Optuna hyperparameter optimization script with best configuration saving.
+Optuna hyperparameter optimization script with comprehensive loss function exploration.
+Supports BCE, Weighted BCE, Focal, Adaptive Focal, and Hybrid loss functions.
 Integrates with the existing Hydra-based training system.
 """
 
@@ -116,12 +117,6 @@ def save_best_configuration(study: optuna.Study, base_cfg: DictConfig, output_di
             optimized_cfg.optimizer.lr = float(value)
         elif param_name == "weight_decay":
             optimized_cfg.optimizer.weight_decay = float(value)
-        elif param_name == "alpha":
-            optimized_cfg.loss.alpha = float(value)
-        elif param_name == "gamma":
-            optimized_cfg.loss.gamma = float(value)
-        elif param_name == "delta":
-            optimized_cfg.loss.delta = float(value)
         elif param_name == "dropout":
             optimized_cfg.model.dropout = float(value)
         elif param_name == "clip_grad_norm":
@@ -130,6 +125,15 @@ def save_best_configuration(study: optuna.Study, base_cfg: DictConfig, output_di
             optimized_cfg.training.threshold = float(value)
         elif param_name == "gradient_accumulation_steps":
             optimized_cfg.training.gradient_accumulation_steps = int(value)
+        # Loss function specific parameters
+        elif param_name == "loss_function":
+            optimized_cfg.loss._target_ = "model.DynamicLossFactory.create_loss"
+            optimized_cfg.loss.loss_type = value
+        elif param_name in ["alpha", "gamma", "delta", "bce_weight", "pos_weight"]:
+            if param_name not in optimized_cfg.loss:
+                optimized_cfg.loss[param_name] = float(value)
+            else:
+                optimized_cfg.loss[param_name] = float(value)
 
     # Remove optuna-specific configs
     if 'optuna' in optimized_cfg:
@@ -243,6 +247,7 @@ def main(cfg: DictConfig) -> None:
     print(f"📁 Output directory: {optimization_dir}")
     print(f"🎯 Direction: {optuna_cfg.direction}")
     print(f"🔄 Number of trials: {optuna_cfg.n_trials}")
+    print(f"📊 Loss functions to explore: {training_cfg.search_space.get('loss_function', {}).get('choices', ['default'])}")
 
     # Run optimization
     study, best_value = create_study_and_optimize(training_cfg)

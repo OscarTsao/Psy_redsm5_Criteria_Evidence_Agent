@@ -1,0 +1,150 @@
+# Comprehensive Loss Function Hyperparameter Optimization Configuration
+# This config explores all loss function variants with extensive parameter tuning
+
+defaults:
+  - default
+  - _self_
+
+optuna:
+  enabled: true
+  n_trials: 100  # Increased for comprehensive exploration
+  direction: maximize
+  timeout: null
+  seed: 42
+  study_name: comprehensive_loss_function_optimization
+  storage: null
+  load_if_exists: true
+
+# Enhanced search space with loss function selection
+search_space:
+  # Loss function type selection - this is the key addition
+  loss_function:
+    method: categorical
+    choices:
+      - "bce"
+      - "weighted_bce"
+      - "focal"
+      - "adaptive_focal"
+      - "hybrid_bce_focal"
+      - "hybrid_bce_adaptive_focal"
+
+  # Training hyperparameters
+  train_batch_size:
+    method: categorical
+    choices: [16, 32, 48, 64, 96, 128]
+  eval_batch_size:
+    method: categorical
+    choices: [32, 48, 64, 96, 128, 256]
+  learning_rate:
+    method: loguniform
+    low: 5e-06
+    high: 1e-04
+  weight_decay:
+    method: loguniform
+    low: 1e-06
+    high: 5e-02
+
+  # Model architecture
+  dropout:
+    method: uniform
+    low: 0.0
+    high: 0.5
+
+  # Training dynamics
+  clip_grad_norm:
+    method: uniform
+    low: 0.1
+    high: 3.0
+  threshold:
+    method: uniform
+    low: 0.01
+    high: 0.5
+  gradient_accumulation_steps:
+    method: categorical
+    choices: [1, 2, 4, 8]
+
+  # Loss function specific parameters
+  # These will be used based on the selected loss function
+
+  # For weighted BCE
+  pos_weight:
+    method: uniform
+    low: 1.0
+    high: 25.0
+
+  # For focal and adaptive focal losses
+  alpha:
+    method: uniform
+    low: 0.05
+    high: 0.95
+  gamma:
+    method: uniform
+    low: 0.1
+    high: 6.0
+
+  # For adaptive focal loss
+  delta:
+    method: uniform
+    low: 0.1
+    high: 4.0
+
+  # For hybrid losses
+  bce_weight:
+    method: uniform
+    low: 0.1
+    high: 0.9
+
+# Override default loss configuration to use dynamic factory
+loss:
+  _target_: model.DynamicLossFactory.create_loss
+  loss_type: "adaptive_focal"  # Default, will be overridden by Optuna
+  reduction: "mean"
+
+# Training configuration optimized for comprehensive search
+training:
+  num_epochs: 25  # Reduced for faster HPO trials
+  early_stopping_patience: 8
+  use_compile: true
+  use_amp: true
+  amp_dtype: bfloat16  # Use bfloat16 for better performance if available
+  use_grad_checkpointing: false  # Disable for faster training during HPO
+  max_checkpoints: 3  # Fewer checkpoints during HPO
+
+# Hardware optimizations
+hardware:
+  dataloader_pin_memory: true
+  enable_tf32: true
+  cudnn_benchmark: true
+  use_bfloat16_if_available: true
+
+# Data loader optimizations for HPO
+train_loader:
+  batch_size: 64  # Will be overridden by Optuna
+  shuffle: true
+  num_workers: 8  # Increased for faster data loading
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 8  # Increased prefetch
+  drop_last: true  # Better for consistent batch sizes
+
+val_loader:
+  batch_size: 128  # Will be overridden by Optuna
+  shuffle: false
+  num_workers: 8
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 4
+  drop_last: false
+
+test_loader:
+  batch_size: 128  # Will be overridden by Optuna
+  shuffle: false
+  num_workers: 8
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 4
+  drop_last: false
+
+hydra:
+  sweep:
+    dir: outputs/optimization/comprehensive_loss/${now:%Y%m%d_%H%M%S}
