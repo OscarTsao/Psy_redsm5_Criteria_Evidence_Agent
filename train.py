@@ -13,7 +13,7 @@ import optuna
 import torch
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
-from torch.cuda.amp import GradScaler
+from torch.amp import GradScaler
 from sklearn.metrics import precision_recall_fscore_support, roc_auc_score, accuracy_score
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -333,7 +333,7 @@ def run_training(cfg: DictConfig) -> float:
 
     train_loader, val_loader, test_loader = build_dataloaders(train_ds, val_ds, test_ds, cfg)
 
-    scaler = GradScaler(enabled=cfg.training.use_amp)
+    scaler = GradScaler('cuda', enabled=cfg.training.use_amp)
 
     best_metric = -float('inf')
     history = []

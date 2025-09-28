@@ -153,6 +153,11 @@ experiments/
 plots/
 figures/
 
+# Optuna studies and databases
+*.db
+optuna_study.db
+optuna_*.db
+
 # GPU memory dumps
 *.gpu
 
