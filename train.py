@@ -96,12 +96,18 @@ class Trainer:
         return avg_loss, metrics
 
     def calculate_metrics(self, labels, predictions, probs=None):
+        """
+        Calculate metrics for multi-binary classification.
+        Each criterion is evaluated independently as a binary classification task.
+        """
+        # Overall metrics across all criteria
         precision, recall, f1, _ = precision_recall_fscore_support(labels, predictions, average='macro', zero_division=0)
-
         precision_micro, recall_micro, f1_micro, _ = precision_recall_fscore_support(labels, predictions, average='micro', zero_division=0)
 
+        # Hamming loss: fraction of wrong labels to total labels
         h_loss = hamming_loss(labels, predictions)
 
+        # Exact match: percentage of samples with all labels predicted correctly
         exact_match = accuracy_score(labels, predictions)
 
         metrics = {
@@ -124,18 +130,21 @@ class Trainer:
             except:
                 pass
 
+        # Per-criterion binary classification metrics
         per_class_metrics = []
         symptom_names = list(create_symptom_mapping().values())
         for i in range(labels.shape[1]):
             p, r, f, _ = precision_recall_fscore_support(labels[:, i], predictions[:, i], average='binary', zero_division=0)
             per_class_metrics.append({
+                'criterion': f'A.{i+1}',
                 'symptom': symptom_names[i] if i < len(symptom_names) else f'Criterion_{i+1}',
                 'precision': p,
                 'recall': r,
-                'f1': f
+                'f1': f,
+                'support': int(np.sum(labels[:, i]))
             })
 
-        metrics['per_class'] = per_class_metrics
+        metrics['per_criterion'] = per_class_metrics
 
         return metrics
 
