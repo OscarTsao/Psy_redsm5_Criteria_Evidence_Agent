@@ -22,6 +22,100 @@ from omegaconf import DictConfig, OmegaConf
 from train import run_training
 
 
+def save_best_configuration(study: optuna.Study, base_cfg: DictConfig, output_dir: Path) -> None:
+    """Save the best trial configuration for production use."""
+    if len([t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]) == 0:
+        print("⚠️  No completed trials found. Cannot save best configuration.")
+        return
+
+    best_trial = study.best_trial
+    best_params = best_trial.params
+
+    # Apply the best parameters to the base config
+    best_cfg = apply_hyperparameters(base_cfg, best_params)
+
+    # Convert to regular dict for saving
+    best_config_dict = OmegaConf.to_container(best_cfg, resolve=True)
+
+    # Save the best configuration
+    best_config_path = output_dir / "best_config.yaml"
+    with open(best_config_path, 'w') as f:
+        yaml.dump(best_config_dict, f, default_flow_style=False, sort_keys=False)
+
+    # Create a production-ready config
+    production_config = best_config_dict.copy()
+    # Remove optuna-specific settings for production
+    if 'optuna' in production_config:
+        del production_config['optuna']
+    if 'search_space' in production_config:
+        del production_config['search_space']
+
+    production_config_path = output_dir / "production_config.yaml"
+    with open(production_config_path, 'w') as f:
+        yaml.dump(production_config, f, default_flow_style=False, sort_keys=False)
+
+    # Save optimization results
+    optimization_results = {
+        'best_trial': {
+            'number': best_trial.number,
+            'value': best_trial.value,
+            'params': best_trial.params,
+            'user_attrs': best_trial.user_attrs,
+        },
+        'study_summary': {
+            'n_trials': len(study.trials),
+            'completed_trials': len([t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]),
+            'pruned_trials': len([t for t in study.trials if t.state == optuna.trial.TrialState.PRUNED]),
+            'failed_trials': len([t for t in study.trials if t.state == optuna.trial.TrialState.FAIL]),
+            'direction': study.direction.name,
+        }
+    }
+
+    results_path = output_dir / "optimization_results.json"
+    with open(results_path, 'w') as f:
+        json.dump(optimization_results, f, indent=2)
+
+    print(f"💾 Best configuration saved to: {best_config_path}")
+    print(f"🚀 Production config saved to: {production_config_path}")
+    print(f"📊 Optimization results saved to: {results_path}")
+
+
+def copy_best_trial_artifacts(study: optuna.Study, output_dir: Path) -> None:
+    """Copy artifacts from the best trial to the optimization output directory."""
+    if len([t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]) == 0:
+        print("⚠️  No completed trials found. Cannot copy artifacts.")
+        return
+
+    best_trial = study.best_trial
+    best_output_dir = best_trial.user_attrs.get('output_dir')
+
+    if not best_output_dir or not Path(best_output_dir).exists():
+        print(f"⚠️  Best trial output directory not found: {best_output_dir}")
+        return
+
+    best_artifacts_dir = output_dir / "best_trial_artifacts"
+    best_artifacts_dir.mkdir(exist_ok=True)
+
+    source_dir = Path(best_output_dir)
+
+    # Copy important files
+    files_to_copy = [
+        "best_model.pt",
+        "history.json",
+        "test_metrics.json",
+        "config.yaml"
+    ]
+
+    for filename in files_to_copy:
+        source_file = source_dir / filename
+        if source_file.exists():
+            target_file = best_artifacts_dir / filename
+            shutil.copy2(source_file, target_file)
+            print(f"📁 Copied {filename} to artifacts directory")
+
+    print(f"✅ Best trial artifacts copied to: {best_artifacts_dir}")
+
+
 def suggest_hyperparameters(trial: optuna.Trial, search_space: DictConfig) -> Dict[str, Any]:
     """Suggest hyperparameters based on the search space configuration."""
     params = {}
@@ -221,11 +315,15 @@ def main(cfg: DictConfig) -> None:
     def objective(trial: optuna.Trial) -> float:
         try:
             return run_training_with_trial(cfg, trial)
+        except optuna.exceptions.TrialPruned:
+            # Re-raise pruned exceptions
+            raise
         except Exception as e:
-            print(f"Trial {trial.number} failed: {e}")
+            print(f"❌ Trial {trial.number} failed with error: {e}")
             import traceback
             traceback.print_exc()
-            raise optuna.exceptions.TrialPruned()
+            # Return a very low score instead of pruning to avoid corrupting the study
+            return -1.0
 
     # Print optimization info
     print(f"🚀 Starting maxed out Optuna optimization...")
@@ -255,14 +353,40 @@ def main(cfg: DictConfig) -> None:
     )
 
     # Save results
-    from optuna_optimize import save_best_configuration, copy_best_trial_artifacts
-    save_best_configuration(study, cfg, optimization_dir)
-    copy_best_trial_artifacts(study, optimization_dir)
+    try:
+        save_best_configuration(study, cfg, optimization_dir)
+        copy_best_trial_artifacts(study, optimization_dir)
+    except Exception as e:
+        print(f"⚠️  Warning: Could not save optimization results: {e}")
+        # Save basic study information as fallback
+        study_info = {
+            'study_name': study.study_name,
+            'direction': study.direction.name,
+            'n_trials': len(study.trials),
+            'completed_trials': len([t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]),
+            'pruned_trials': len([t for t in study.trials if t.state == optuna.trial.TrialState.PRUNED]),
+            'failed_trials': len([t for t in study.trials if t.state == optuna.trial.TrialState.FAIL]),
+        }
+        if len([t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]) > 0:
+            study_info['best_value'] = study.best_value
+            study_info['best_params'] = study.best_params
+
+        with open(optimization_dir / "study_summary.json", "w") as f:
+            json.dump(study_info, f, indent=2)
 
     print(f"\n✅ Maxed out optimization completed!")
-    print(f"🏆 Best performance: {study.best_value:.4f}")
     print(f"📊 Total trials: {len(study.trials)}")
-    print(f"🎯 Best trial: {study.best_trial.number}")
+
+    completed_trials = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
+    if len(completed_trials) > 0:
+        print(f"🏆 Best performance: {study.best_value:.4f}")
+        print(f"🎯 Best trial: {study.best_trial.number}")
+    else:
+        print("⚠️  No trials completed successfully.")
+
+    print(f"✅ Completed trials: {len(completed_trials)}")
+    print(f"✂️  Pruned trials: {len([t for t in study.trials if t.state == optuna.trial.TrialState.PRUNED])}")
+    print(f"❌ Failed trials: {len([t for t in study.trials if t.state == optuna.trial.TrialState.FAIL])}")
 
 
 if __name__ == '__main__':

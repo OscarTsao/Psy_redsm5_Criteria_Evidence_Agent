@@ -11,9 +11,9 @@ optuna:
   direction: maximize
   timeout: 604800  # 7 days timeout (in seconds)
   seed: 42
-  study_name: maxed_comprehensive_hpo_v2
-  storage: sqlite:///optuna_maxed_study.db  # Persistent storage
-  load_if_exists: true
+  study_name: maxed_comprehensive_hpo_v3_fresh
+  storage: sqlite:///optuna_maxed_study_v3.db  # Fresh persistent storage
+  load_if_exists: false  # Start fresh
 
   # Advanced pruning configuration for efficiency
   pruning:

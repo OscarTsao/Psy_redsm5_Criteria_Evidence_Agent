@@ -1,0 +1,62 @@
+# Test configuration for HPO script validation
+defaults:
+  - default
+  - _self_
+
+optuna:
+  enabled: true
+  n_trials: 2  # Just 2 trials for testing
+  direction: maximize
+  timeout: 300  # 5 minutes timeout
+  seed: 42
+  study_name: test_hpo_validation
+  storage: sqlite:///test_hpo.db
+  load_if_exists: false
+
+  pruning:
+    enabled: false  # Disable for quick test
+
+# Minimal search space for testing
+search_space:
+  train_batch_size:
+    method: categorical
+    choices: [16, 32]
+  eval_batch_size:
+    method: categorical
+    choices: [64, 128]
+  learning_rate:
+    method: categorical
+    choices: [1e-05, 2e-05]
+  weight_decay:
+    method: categorical
+    choices: [0.01, 0.02]
+  loss_function:
+    method: categorical
+    choices: ["bce", "focal"]
+  alpha:
+    method: uniform
+    low: 0.25
+    high: 0.75
+  gamma:
+    method: uniform
+    low: 1.0
+    high: 2.0
+  dropout:
+    method: uniform
+    low: 0.1
+    high: 0.3
+
+# Quick training settings
+training:
+  num_epochs: 2  # Very short for testing
+  early_stopping_patience: 1
+  use_compile: false
+  use_amp: true
+  amp_dtype: float16
+
+# Save minimal checkpoints
+max_checkpoints: 1
+
+hydra:
+  sweep:
+    dir: outputs/test_hpo/${now:%Y%m%d_%H%M%S}
