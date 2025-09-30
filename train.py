@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import glob
+import multiprocessing as mp
 from datetime import datetime
 from pathlib import Path
 from typing import Dict
@@ -100,6 +101,18 @@ def build_dataloaders(train_ds, val_ds, test_ds, cfg):
         prefetch_factor = params.get("prefetch_factor", None)
         persistent_workers = params.get("persistent_workers", False)
 
+        if num_workers > 0:
+            try:
+                test_lock = mp.get_context().Lock()
+                del test_lock
+            except (RuntimeError, OSError, PermissionError):
+                print("⚠️  System does not permit multiprocessing locks; falling back to num_workers=0.")
+                num_workers = 0
+
+        if num_workers == 0:
+            prefetch_factor = None
+            persistent_workers = False
+
         loader_kwargs = {
             "batch_size": batch_size,
             "shuffle": shuffle,
@@ -111,7 +124,16 @@ def build_dataloaders(train_ds, val_ds, test_ds, cfg):
         if prefetch_factor is not None:
             loader_kwargs["prefetch_factor"] = prefetch_factor
 
-        return DataLoader(ds, **loader_kwargs)
+        try:
+            return DataLoader(ds, **loader_kwargs)
+        except (RuntimeError, OSError, PermissionError, ValueError) as exc:
+            if num_workers > 0:
+                print(f"⚠️  DataLoader worker startup failed ({exc}); retrying with num_workers=0.")
+                loader_kwargs["num_workers"] = 0
+                loader_kwargs["persistent_workers"] = False
+                loader_kwargs.pop("prefetch_factor", None)
+                return DataLoader(ds, **loader_kwargs)
+            raise
 
     train_loader = make_loader(train_ds, cfg.train_loader, fallback_shuffle=True)
     val_loader = make_loader(val_ds, cfg.val_loader)
@@ -147,10 +169,12 @@ def train_one_epoch(
     use_amp,
     scaler,
     amp_dtype,
+    max_steps_per_epoch: int | None = None,
 ):
     model.train()
-    running_loss = 0.0
+    total_loss = 0.0
     accumulated_loss = 0.0
+    optimizer_steps = 0
 
     optimizer.zero_grad()
     for step, batch in enumerate(tqdm(train_loader, desc='Train', leave=False)):
@@ -175,11 +199,30 @@ def train_one_epoch(
                 optimizer.step()
             optimizer.zero_grad()
 
-            running_loss += accumulated_loss
+            total_loss += accumulated_loss
             accumulated_loss = 0.0
+            optimizer_steps += 1
 
-    total_steps = max(1, len(train_loader) // gradient_accumulation_steps)
-    return running_loss / total_steps
+            if max_steps_per_epoch is not None and optimizer_steps >= max_steps_per_epoch:
+                break
+
+    if accumulated_loss > 0:
+        if scaler and use_amp:
+            scaler.unscale_(optimizer)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad_norm)
+        if scaler and use_amp:
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            optimizer.step()
+        optimizer.zero_grad()
+        total_loss += accumulated_loss
+        optimizer_steps += 1
+
+    if optimizer_steps == 0:
+        return 0.0
+
+    return total_loss / optimizer_steps
 
 
 def evaluate_model(model, loader, device, threshold: float = 0.5, use_amp: bool = True, amp_dtype=torch.float16):
@@ -250,30 +293,46 @@ def save_history_and_checkpoint(
     epoch,
     best: bool = False,
     max_checkpoints: int = 5,
+    full_cfg=None,
 ):
-    ckpt = {
-        'epoch': epoch,
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'config': OmegaConf.to_container(cfg, resolve=True),
-        'metrics': metrics,
-        'history': history,
-    }
+    training_cfg = cfg.get('training', cfg)
+    save_checkpoints = training_cfg.get('save_checkpoints', True)
+    save_best_only = training_cfg.get('save_best_only', False)
+    save_optimizer_state = training_cfg.get('save_optimizer_state', True)
+    save_history_file = training_cfg.get('save_history', True)
+    include_history_in_checkpoint = training_cfg.get('include_history_in_checkpoint', True)
+    save_config_in_checkpoint = training_cfg.get('save_config_in_checkpoint', True)
 
-    if best:
-        ckpt_name = output_dir / 'best_model.pt'
-    else:
-        ckpt_name = output_dir / f'checkpoint_epoch_{epoch}.pt'
-        # Clean up old checkpoints after saving the new one
+    should_save_ckpt = save_checkpoints and (best or not save_best_only)
+
+    if should_save_ckpt:
+        ckpt = {
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'metrics': metrics,
+        }
+
+        if save_optimizer_state:
+            ckpt['optimizer_state_dict'] = optimizer.state_dict()
+
+        if save_config_in_checkpoint:
+            # Save the full config if provided, otherwise fallback to cfg
+            config_to_save = full_cfg if full_cfg is not None else cfg
+            ckpt['config'] = OmegaConf.to_container(config_to_save, resolve=True)
+
+        if include_history_in_checkpoint:
+            ckpt['history'] = history
+
+        ckpt_name = output_dir / ('best_model.pt' if best else f'checkpoint_epoch_{epoch}.pt')
         torch.save(ckpt, ckpt_name)
-        cleanup_old_checkpoints(output_dir, max_checkpoints)
 
-    if best:
-        torch.save(ckpt, ckpt_name)
+        if not best and max_checkpoints and max_checkpoints > 0:
+            cleanup_old_checkpoints(output_dir, max_checkpoints)
 
-    history_path = output_dir / 'history.json'
-    with open(history_path, 'w') as f:
-        json.dump(history, f, indent=2)
+    if save_history_file:
+        history_path = output_dir / 'history.json'
+        with open(history_path, 'w') as f:
+            json.dump(history, f, indent=2)
 
 
 def extract_config(cfg: DictConfig) -> DictConfig:
@@ -288,6 +347,14 @@ def run_training(cfg: DictConfig) -> float:
     # Apply hardware optimizations first
     from model import optimize_hardware_settings
     optimize_hardware_settings()
+
+    # Store full config for checkpoint saving
+    full_cfg = cfg
+
+    # If cfg has 'training' key, we're receiving the full hydra config
+    # Extract the training section which contains everything we need
+    if 'training' in cfg:
+        cfg = cfg.training
 
     trial = cfg.get("trial")
     if trial is not None:
@@ -333,7 +400,10 @@ def run_training(cfg: DictConfig) -> float:
 
     train_loader, val_loader, test_loader = build_dataloaders(train_ds, val_ds, test_ds, cfg)
 
-    scaler = GradScaler('cuda', enabled=cfg.training.use_amp)
+    amp_device_type = 'cuda' if torch.cuda.is_available() else 'cpu'
+    use_amp = bool(cfg.training.use_amp and amp_device_type == 'cuda')
+
+    scaler = GradScaler(amp_device_type, enabled=use_amp)
 
     best_metric = -float('inf')
     history = []
@@ -341,6 +411,8 @@ def run_training(cfg: DictConfig) -> float:
     early_stopping_patience = cfg.training.get('early_stopping_patience', 10)
 
     amp_dtype = getattr(torch, cfg.training.amp_dtype) if isinstance(cfg.training.amp_dtype, str) else cfg.training.amp_dtype
+    if amp_device_type != 'cuda':
+        amp_dtype = torch.float32
 
     for epoch in range(1, cfg.training.num_epochs + 1):
         train_loss = train_one_epoch(
@@ -351,9 +423,10 @@ def run_training(cfg: DictConfig) -> float:
             device,
             cfg.training.gradient_accumulation_steps,
             cfg.training.clip_grad_norm,
-            cfg.training.use_amp,
+            use_amp,
             scaler,
             amp_dtype,
+            cfg.training.get('max_steps_per_epoch'),
         )
 
         val_metrics, val_per = evaluate_model(
@@ -361,7 +434,7 @@ def run_training(cfg: DictConfig) -> float:
             val_loader,
             device,
             threshold=cfg.training.threshold,
-            use_amp=cfg.training.use_amp,
+            use_amp=use_amp,
             amp_dtype=amp_dtype,
         )
 
@@ -391,7 +464,7 @@ def run_training(cfg: DictConfig) -> float:
                 'val_per_criteria': val_per,
             }
         max_checkpoints = cfg.training.get('max_checkpoints', 5)
-        save_history_and_checkpoint(output_dir, model, optimizer, cfg, history, metrics_payload, epoch, best=is_best, max_checkpoints=max_checkpoints)
+        save_history_and_checkpoint(output_dir, model, optimizer, cfg, history, metrics_payload, epoch, best=is_best, max_checkpoints=max_checkpoints, full_cfg=full_cfg)
 
         status = f"Epoch {epoch}: train_loss={train_loss:.4f} val_{cfg.monitor_metric}={metric_value:.4f}"
         if is_best:
@@ -418,7 +491,7 @@ def run_training(cfg: DictConfig) -> float:
         test_loader,
         device,
         threshold=cfg.training.threshold,
-        use_amp=cfg.training.use_amp,
+        use_amp=use_amp,
         amp_dtype=amp_dtype,
     )
     with open(output_dir / 'test_metrics.json', 'w') as f:
@@ -496,7 +569,8 @@ def main(cfg: DictConfig) -> None:
     OmegaConf.set_struct(cfg.training, False)
     cfg.training.seed = cfg.get('seed', 42)
     OmegaConf.set_struct(cfg.training, True)
-    run_training(cfg.training)
+    # Pass full config to run_training so it can save complete config in checkpoint
+    run_training(cfg)
 
 
 if __name__ == '__main__':

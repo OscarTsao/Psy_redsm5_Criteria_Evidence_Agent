@@ -111,7 +111,9 @@ def evaluate_model(
 
 
 def build_loader(dataset, loader_cfg: DictConfig) -> DataLoader:
-    num_workers = loader_cfg.get("num_workers", os.cpu_count() or 0)
+    num_workers = loader_cfg.get("num_workers", None)
+    if num_workers is None:
+        num_workers = os.cpu_count() or 0
     shuffle = loader_cfg.get("shuffle", False)
     drop_last = loader_cfg.get("drop_last", False)
     pin_memory = loader_cfg.get("pin_memory", True)
@@ -253,7 +255,7 @@ def main() -> None:
     evaluation_dir = evaluation_root / f"{timestamp}_{eval_name}"
     evaluation_dir.mkdir(parents=True, exist_ok=False)
 
-    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     training_cfg, config_source = load_training_config(run_dir, checkpoint, checkpoint_path)
 
     seed = training_cfg.get("seed", 42)
