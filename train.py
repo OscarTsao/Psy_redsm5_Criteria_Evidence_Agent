@@ -20,7 +20,7 @@ from sklearn.metrics import precision_recall_fscore_support, roc_auc_score, accu
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from data import make_pairwise_datasets
+from data import make_pairwise_datasets_from_groundtruth
 from model import DynamicLossFactory, optimize_hardware_settings
 
 
@@ -368,9 +368,10 @@ def run_training(cfg: DictConfig) -> float:
     if trial is not None:
         trial.set_user_attr('output_dir', str(output_dir))
 
-    train_ds, val_ds, test_ds, _ = make_pairwise_datasets(
-        cfg.posts_path,
-        cfg.annotations_path,
+    # Use groundtruth data instead of separate posts and annotations
+    groundtruth_path = "Data/groundtruth/redsm5_ground_truth.json"
+    train_ds, val_ds, test_ds, _ = make_pairwise_datasets_from_groundtruth(
+        groundtruth_path,
         cfg.criteria_path,
         tokenizer_name=cfg.model.model_name,
         seed=seed,
@@ -558,14 +559,14 @@ def ensure_output_dir(cfg: DictConfig) -> Path:
     return run_dir
 
 
-@hydra.main(version_base=None, config_path='configs', config_name='config')
+@hydra.main(version_base=None, config_path='configs/training', config_name='default')
 def main(cfg: DictConfig) -> None:
     print("Configuration:\n" + OmegaConf.to_yaml(cfg))
     # allow setting seed on structured config
-    OmegaConf.set_struct(cfg.training, False)
-    cfg.training.seed = cfg.get('seed', 42)
-    OmegaConf.set_struct(cfg.training, True)
-    run_training(cfg.training)
+    OmegaConf.set_struct(cfg, False)
+    cfg.seed = cfg.get('seed', 42)
+    OmegaConf.set_struct(cfg, True)
+    run_training(cfg)
 
 
 if __name__ == '__main__':

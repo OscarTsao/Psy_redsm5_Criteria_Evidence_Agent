@@ -1,3 +1,4 @@
+import os
 import torch
 import torch.nn as nn
 from transformers import AutoModel, AutoConfig
@@ -304,7 +305,8 @@ def optimize_hardware_settings():
 
         # Set optimal number of threads
         if hasattr(torch, 'set_num_threads'):
-            torch.set_num_threads(min(8, torch.get_num_threads()))
+            cpu_count = os.cpu_count() or 1
+            torch.set_num_threads(max(1, min(8, cpu_count)))
 
         print(f"Hardware optimizations applied for {torch.cuda.get_device_name()}")
         print(f"CUDA version: {torch.version.cuda}")

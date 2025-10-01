@@ -56,6 +56,12 @@ training:
   max_steps_per_epoch: null
   max_checkpoints: 5
   early_stopping_patience: 10
+  save_checkpoints: true
+  save_best_only: false
+  save_optimizer_state: true
+  save_history: true
+  include_history_in_checkpoint: true
+  save_config_in_checkpoint: true
 
 # Optimization
 optimizer:
@@ -104,6 +110,10 @@ optuna:
   study_name: hybrid_loss_hpo
   storage: null # e.g., sqlite:///optuna.db
   load_if_exists: true
+  cleanup_trial_dirs: false
+  keep_best_trial_dir: true
+  remove_best_trial_dir_after_export: false
+  artifact_root: null
 
 search_space:
   train_batch_size:

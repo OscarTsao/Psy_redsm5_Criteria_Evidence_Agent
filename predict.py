@@ -16,7 +16,7 @@ from sklearn.metrics import accuracy_score, precision_recall_fscore_support, roc
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from data import make_pairwise_datasets
+from data import make_pairwise_datasets_from_groundtruth
 
 
 def autocast_context(use_amp: bool, dtype: torch.dtype):
@@ -111,7 +111,9 @@ def evaluate_model(
 
 
 def build_loader(dataset, loader_cfg: DictConfig) -> DataLoader:
-    num_workers = loader_cfg.get("num_workers", os.cpu_count() or 0)
+    num_workers = loader_cfg.get("num_workers", None)
+    if num_workers is None:
+        num_workers = os.cpu_count() or 0
     shuffle = loader_cfg.get("shuffle", False)
     drop_last = loader_cfg.get("drop_last", False)
     pin_memory = loader_cfg.get("pin_memory", True)
@@ -151,6 +153,8 @@ def apply_hardware_settings(hardware_cfg: DictConfig | Dict[str, bool]) -> None:
 
 def load_training_config(run_dir: Path, checkpoint: Dict, checkpoint_path: Path) -> Tuple[DictConfig, str]:
     hydra_config_path = run_dir / ".hydra" / "config.yaml"
+    direct_config_path = run_dir / "config.yaml"
+
     if hydra_config_path.exists():
         cfg = OmegaConf.load(hydra_config_path)
         if "training" in cfg:
@@ -159,6 +163,11 @@ def load_training_config(run_dir: Path, checkpoint: Dict, checkpoint_path: Path)
             training_cfg = cfg
         source = str(hydra_config_path)
         seed_value = cfg.get("seed", training_cfg.get("seed", 42))
+    elif direct_config_path.exists():
+        cfg = OmegaConf.load(direct_config_path)
+        training_cfg = cfg  # The config file contains all sections
+        source = str(direct_config_path)
+        seed_value = cfg.get("seed", 42)
     else:
         config_data = checkpoint.get("config")
         if config_data is None:
@@ -263,9 +272,10 @@ def main() -> None:
 
     tokenizer_name = training_cfg.model.model_name
 
-    split_datasets = make_pairwise_datasets(
-        posts_path,
-        annotations_path,
+    # Use groundtruth data instead of separate posts and annotations
+    groundtruth_path = "Data/groundtruth/redsm5_ground_truth.json"
+    split_datasets = make_pairwise_datasets_from_groundtruth(
+        groundtruth_path,
         criteria_path,
         tokenizer_name=tokenizer_name,
         seed=seed,

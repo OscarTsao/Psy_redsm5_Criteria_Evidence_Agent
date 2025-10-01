@@ -4,8 +4,8 @@
 
 This configuration provides comprehensive hyperparameter optimization with 500 trials, advanced pruning, and extensive search space covering:
 
-- **Loss functions**: BCE, Weighted BCE, Focal, Adaptive Focal, Hybrid
-- **Optimizers**: AdamW, Adam, RMSprop with parameter tuning
+- **Loss functions**: BCE, Weighted BCE, Focal, Adaptive Focal, Hybrid BCE+Focal variants
+- **Optimizers**: AdamW and Adam with tuned betas/eps
 - **Schedulers**: Plateau, Cosine, Linear, Exponential
 - **Architecture**: Dropout, batch sizes, gradient settings
 - **Training**: Early stopping, gradient checkpointing, accumulation
@@ -60,7 +60,8 @@ python run_maxed_hpo.py optuna.pruning.enabled=false
 - **Weighted BCE**: Class-balanced BCE with pos_weight tuning
 - **Focal**: α and γ tuning for hard example focus
 - **Adaptive Focal**: Additional δ parameter for dynamic focusing
-- **Hybrid**: BCE + Focal combination with weight tuning
+- **Hybrid BCE Focal**: BCE + Focal combination with weight tuning
+- **Hybrid BCE Adaptive Focal**: Adds delta term for adaptive focusing while keeping BCE stability
 
 ### Key Parameters Optimized
 - **Batch sizes**: 8-256 (train), 32-320 (eval)
@@ -76,6 +77,7 @@ outputs/optimization/YYYYMMDD_HHMMSS_maxed_comprehensive_hpo_v2/
 ├── best_config.yaml              # Best hyperparameters
 ├── production_config.yaml        # Production-ready config
 ├── optimization_results.json     # Full optimization history
+├── all_trials.csv                # Tabular view of every trial (number, params, metrics)
 ├── base_config.yaml             # Original configuration
 └── best_trial_artifacts/        # Best model checkpoints
     ├── best_model.pt
@@ -151,6 +153,6 @@ python run_maxed_hpo.py optuna.storage=postgresql://user:pass@host/db
 ### Best Parameter Ranges (Historical)
 - **Learning rate**: 1e-5 to 3e-5
 - **Batch size**: 32-96 (optimal balance)
-- **Loss function**: Adaptive Focal (typically best)
+- **Loss function**: Adaptive Focal or Hybrid BCE Adaptive Focal (typically best)
 - **Dropout**: 0.1-0.3
 - **Weight decay**: 1e-3 to 1e-2

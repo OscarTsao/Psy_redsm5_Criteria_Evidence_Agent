@@ -36,8 +36,44 @@ def create_symptom_mapping() -> Dict[str, str]:
     }
 
 
+def build_post_level_labels_from_groundtruth(groundtruth_path: str) -> pd.DataFrame:
+    """Load groundtruth data and return dataframe with columns: post_id, text, and a 9-dim labels array."""
+    # Load data from JSON (more efficient based on testing)
+    import json
+    rows = []
+    with open(groundtruth_path, 'r') as f:
+        for line in f:
+            rows.append(json.loads(line))
+    df = pd.DataFrame(rows)
+
+    # Define the symptom order matching the original mapping
+    symptom_columns = [
+        "DEPRESSED_MOOD",    # A.1
+        "ANHEDONIA",         # A.2
+        "APPETITE_CHANGE",   # A.3
+        "SLEEP_ISSUES",      # A.4
+        "PSYCHOMOTOR",       # A.5
+        "FATIGUE",           # A.6
+        "WORTHLESSNESS",     # A.7
+        "COGNITIVE_ISSUES",  # A.8
+        "SUICIDAL_THOUGHTS"  # A.9
+    ]
+
+    out_rows = []
+    for _, row in df.iterrows():
+        # Extract labels as numpy array in the correct order
+        labels = np.array([float(row[col]) for col in symptom_columns], dtype=np.float32)
+        out_rows.append({
+            "post_id": row["post_id"],
+            "text": row["text"],
+            "labels": labels
+        })
+
+    return pd.DataFrame(out_rows)
+
+
 def build_post_level_labels(posts_path: str, annotations_path: str) -> pd.DataFrame:
-    """Return a dataframe with columns: post_id, text, and a 9-dim labels array."""
+    """Legacy function - kept for compatibility. Use build_post_level_labels_from_groundtruth instead."""
     posts_df = pd.read_csv(posts_path)
     ann_df = pd.read_csv(annotations_path)
 
@@ -120,6 +156,48 @@ class CriteriaPairDataset(Dataset):
         }
 
 
+def make_pairwise_datasets_from_groundtruth(groundtruth_path: str,
+                                          criteria_path: str,
+                                          tokenizer_name: str = "bert-base-uncased",
+                                          train_frac: float = 0.8,
+                                          val_frac: float = 0.1,
+                                          seed: int = 42,
+                                          max_length: int = 512):
+    """Build train/val/test CriteriaPairDataset objects from groundtruth data."""
+    rng = np.random.default_rng(seed)
+
+    post_df = build_post_level_labels_from_groundtruth(groundtruth_path)
+    criteria_map = load_dsm5_criteria(criteria_path)
+    pairs_df = expand_to_pairs(post_df, criteria_map)
+
+    # Shuffle by post to avoid leakage across splits
+    unique_posts = post_df["post_id"].values
+    rng.shuffle(unique_posts)
+    n = len(unique_posts)
+    n_train = int(n * train_frac)
+    n_val = int(n * val_frac)
+    train_ids = set(unique_posts[:n_train])
+    val_ids = set(unique_posts[n_train:n_train + n_val])
+    test_ids = set(unique_posts[n_train + n_val:])
+
+    def to_ds(sub_df: pd.DataFrame):
+        return CriteriaPairDataset(
+            posts=sub_df["text"].tolist(),
+            criteria=sub_df["criteria_text"].tolist(),
+            labels=sub_df["y"].tolist(),
+            criterion_indices=sub_df["criteria_idx"].tolist(),
+            post_ids=sub_df["post_id"].tolist(),
+            tokenizer_name=tokenizer_name,
+            max_length=max_length,
+        )
+
+    train_df = pairs_df[pairs_df["post_id"].isin(train_ids)].reset_index(drop=True)
+    val_df = pairs_df[pairs_df["post_id"].isin(val_ids)].reset_index(drop=True)
+    test_df = pairs_df[pairs_df["post_id"].isin(test_ids)].reset_index(drop=True)
+
+    return to_ds(train_df), to_ds(val_df), to_ds(test_df), criteria_map
+
+
 def make_pairwise_datasets(posts_path: str,
                            annotations_path: str,
                            criteria_path: str,
@@ -128,7 +206,7 @@ def make_pairwise_datasets(posts_path: str,
                            val_frac: float = 0.1,
                            seed: int = 42,
                            max_length: int = 512):
-    """Build train/val/test CriteriaPairDataset objects from inputs."""
+    """Legacy function - kept for compatibility. Use make_pairwise_datasets_from_groundtruth instead."""
     rng = np.random.default_rng(seed)
 
     post_df = build_post_level_labels(posts_path, annotations_path)

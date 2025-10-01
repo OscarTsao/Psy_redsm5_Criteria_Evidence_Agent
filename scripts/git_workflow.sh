@@ -162,6 +162,20 @@ function clean_outputs() {
         fi
     done <<< "$runs"
 
+    local optimization_dir="outputs/optimization"
+    if [[ -d "$optimization_dir" ]]; then
+        echo -e "${BLUE}Cleaning old optimization studies...${NC}"
+        local opt_runs=$(find "$optimization_dir" -maxdepth 1 -type d -name "20*" | sort -r)
+        local opt_count=0
+        while IFS= read -r run; do
+            opt_count=$((opt_count + 1))
+            if [[ $opt_count -gt 5 ]]; then
+                echo "Removing old study: $(basename "$run")"
+                rm -rf "$run"
+            fi
+        done <<< "$opt_runs"
+    fi
+
     echo -e "${GREEN}✓ Cleanup completed${NC}"
 }
 

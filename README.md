@@ -78,6 +78,16 @@ python train.py training=hpo
   ```
 - Per-trial outputs saved under `outputs/optuna/<timestamp>/`.
 
+For long-running, fully expanded searches with advanced artifact export use `run_maxed_hpo.py`:
+
+```bash
+python run_maxed_hpo.py optuna.n_trials=500 optuna.storage="sqlite:///optuna_maxed_study_v3.db"
+```
+
+- Automatically resumes existing studies or auto-increments the study name when re-running.
+- Writes `best_config.yaml`, `production_config.yaml`, `base_config.yaml`, and `all_trials.csv` into `outputs/optimization/<timestamp>_<study>/`.
+- Mirrors Optuna pruning configuration defined in `configs/training/maxed_hpo.yaml`.
+
 ### Tuned Parameters
 
 Optuna considers:

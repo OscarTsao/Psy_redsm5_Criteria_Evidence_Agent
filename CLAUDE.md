@@ -28,7 +28,7 @@ python train.py
 python train.py training.num_epochs=50 train_loader.batch_size=32
 
 # Optuna hyperparameter optimization
-python optuna_optimize.py
+python run_maxed_hpo.py
 
 # Use optimized configuration from HPO
 python train.py --config-path=outputs/optimization/TIMESTAMP_study/production_config.yaml

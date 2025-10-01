@@ -1,0 +1,109 @@
+# Standalone custom configuration with best hyperparameters from HPO study
+# No defaults inheritance to avoid config conflicts
+
+# Dataset paths
+posts_path: Data/redsm5/redsm5_posts.csv
+annotations_path: Data/redsm5/redsm5_annotations.csv
+criteria_path: Data/DSM-5/DSM_Criteria_Array_Fixed_Major_Depressive.json
+
+# Model configuration
+model:
+  _target_: model.get_pairwise_model
+  model_name: bert-base-uncased
+  device: null # auto-detect
+  dropout: 0.18087897198748515
+
+# Data loaders with custom batch sizes
+eval_batch_size: 64
+
+train_loader:
+  batch_size: 48
+  shuffle: true
+  num_workers: null # auto-detect based on CPU cores
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 4
+  drop_last: false
+
+val_loader:
+  batch_size: 64
+  shuffle: false
+  num_workers: null # auto-detect based on CPU cores
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 2
+  drop_last: false
+
+test_loader:
+  batch_size: 64
+  shuffle: false
+  num_workers: null # auto-detect based on CPU cores
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 2
+  drop_last: false
+
+# Training settings with custom parameters
+training:
+  num_epochs: 100
+  gradient_accumulation_steps: 1
+  clip_grad_norm: 2.5743406195889795
+  use_compile: true
+  use_amp: true
+  amp_dtype: float16
+  use_grad_checkpointing: false  # Custom: disabled
+  threshold: 0.6590689742204876
+  max_steps_per_epoch: 2000  # Custom: limited steps per epoch
+  max_checkpoints: 5
+  early_stopping_patience: 25  # Custom: increased patience
+  save_checkpoints: true
+  save_best_only: false
+  save_optimizer_state: true
+  save_history: true
+  include_history_in_checkpoint: true
+  save_config_in_checkpoint: true
+
+# Optimizer with custom AdamW parameters
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 2.612582919692025e-05
+  weight_decay: 0.0008574287554967094
+  betas: [0.9222391435579143, 0.993747588451296]
+  eps: 5.346946512135645e-09
+
+# Loss function with hybrid BCE + adaptive focal loss
+loss:
+  _target_: model.DynamicLossFactory.create_loss
+  loss_type: hybrid_bce_adaptive_focal
+  alpha: 0.6809458970943675
+  gamma: 1.789301521916303
+  delta: 1.8535704334044592
+  bce_weight: 0.6963416097600597
+  pos_weight: 0.27056698909457856
+  reduction: mean
+
+# Scheduler with cosine annealing (clean config)
+scheduler:
+  _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+  T_max: 100  # matches num_epochs
+  eta_min: 0.0
+
+# Evaluation settings
+save_top_k: 1
+monitor_metric: f1
+monitor_mode: max
+
+# Paths
+output_dir: outputs/training
+
+# Hardware optimizations
+hardware:
+  dataloader_pin_memory: true
+  enable_tf32: true
+  cudnn_benchmark: true
+  use_bfloat16_if_available: true
+
+# Hydra configuration
+hydra:
+  run:
+    dir: outputs/training/custom_hpo_best_${now:%Y%m%d_%H%M%S}

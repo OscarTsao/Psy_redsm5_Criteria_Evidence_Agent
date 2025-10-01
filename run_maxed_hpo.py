@@ -15,6 +15,7 @@ from typing import Dict, Any, Optional
 
 import hydra
 import optuna
+import pandas as pd
 import yaml
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
@@ -41,6 +42,10 @@ def save_best_configuration(study: optuna.Study, base_cfg: DictConfig, output_di
     best_config_path = output_dir / "best_config.yaml"
     with open(best_config_path, 'w') as f:
         yaml.dump(best_config_dict, f, default_flow_style=False, sort_keys=False)
+
+    base_config_path = output_dir / "base_config.yaml"
+    with open(base_config_path, 'w') as f:
+        yaml.dump(OmegaConf.to_container(base_cfg, resolve=True), f, default_flow_style=False, sort_keys=False)
 
     # Create a production-ready config
     production_config = best_config_dict.copy()
@@ -116,9 +121,50 @@ def copy_best_trial_artifacts(study: optuna.Study, output_dir: Path) -> None:
     print(f"✅ Best trial artifacts copied to: {best_artifacts_dir}")
 
 
+def export_trials_dataframe(study: optuna.Study, output_dir: Path) -> None:
+    """Persist the full trials DataFrame for downstream analysis."""
+    try:
+        df = study.trials_dataframe(attrs=("number", "value", "state", "params", "user_attrs"))
+    except Exception as exc:
+        print(f"⚠️  Could not export trials dataframe: {exc}")
+        return
+
+    if df.empty:
+        print("⚠️  Trials dataframe is empty; skipping export.")
+        return
+
+    csv_path = output_dir / "all_trials.csv"
+    df.to_csv(csv_path, index=False)
+    print(f"📈 Trials dataframe saved to: {csv_path}")
+
+
+def cleanup_trial_output(path_like: Optional[str], root: Optional[Path], reason: str, *, force: bool = False) -> None:
+    """Remove a trial output directory if it exists and lies within the allowed root."""
+    if path_like is None:
+        return
+
+    candidate = Path(path_like)
+    if not candidate.exists():
+        return
+
+    if root is not None:
+        try:
+            candidate.resolve().relative_to(root.resolve())
+        except (ValueError, FileNotFoundError):
+            print(f"⚠️  Skipping cleanup outside artifact root: {candidate}")
+            return
+
+    try:
+        shutil.rmtree(candidate)
+        icon = "🧹" if not force else "🧽"
+        print(f"{icon} Removed trial artifacts at {candidate} ({reason})")
+    except Exception as exc:
+        print(f"⚠️  Could not remove trial artifacts at {candidate}: {exc}")
+
+
 def suggest_hyperparameters(trial: optuna.Trial, search_space: DictConfig) -> Dict[str, Any]:
     """Suggest hyperparameters based on the search space configuration."""
-    params = {}
+    params: Dict[str, Any] = {}
 
     for param_name, param_config in search_space.items():
         method = param_config.method
@@ -126,11 +172,16 @@ def suggest_hyperparameters(trial: optuna.Trial, search_space: DictConfig) -> Di
         if method == "categorical":
             params[param_name] = trial.suggest_categorical(param_name, param_config.choices)
         elif method == "uniform":
-            params[param_name] = trial.suggest_uniform(param_name, param_config.low, param_config.high)
+            params[param_name] = trial.suggest_float(param_name, float(param_config.low), float(param_config.high))
         elif method == "loguniform":
-            params[param_name] = trial.suggest_loguniform(param_name, param_config.low, param_config.high)
+            params[param_name] = trial.suggest_float(
+                param_name,
+                float(param_config.low),
+                float(param_config.high),
+                log=True,
+            )
         elif method == "int":
-            params[param_name] = trial.suggest_int(param_name, param_config.low, param_config.high)
+            params[param_name] = trial.suggest_int(param_name, int(param_config.low), int(param_config.high))
         else:
             raise ValueError(f"Unknown sampling method: {method}")
 
@@ -171,8 +222,12 @@ def apply_hyperparameters(cfg: DictConfig, params: Dict[str, Any]) -> DictConfig
             trial_cfg.training.max_steps_per_epoch = value if value != "null" else None
 
     # Handle optimizer configuration
-    if "optimizer_type" in params:
-        optimizer_type = params["optimizer_type"]
+    optimizer_type = params.get("optimizer_type")
+    beta1 = params.get("beta1")
+    beta2 = params.get("beta2")
+    eps = params.get("eps")
+
+    if optimizer_type:
         if optimizer_type == "adamw":
             trial_cfg.optimizer._target_ = "torch.optim.AdamW"
         elif optimizer_type == "adam":
@@ -180,32 +235,56 @@ def apply_hyperparameters(cfg: DictConfig, params: Dict[str, Any]) -> DictConfig
         elif optimizer_type == "rmsprop":
             trial_cfg.optimizer._target_ = "torch.optim.RMSprop"
 
-        # Apply optimizer-specific parameters
-        for param in ["beta1", "beta2", "eps"]:
-            if param in params:
-                trial_cfg.optimizer[param] = float(params[param])
+    if optimizer_type in {"adamw", "adam"}:
+        if beta1 is not None and beta2 is not None:
+            trial_cfg.optimizer.betas = (float(beta1), float(beta2))
+        elif "betas" in trial_cfg.optimizer:
+            del trial_cfg.optimizer["betas"]
+    elif "betas" in trial_cfg.optimizer:
+        del trial_cfg.optimizer["betas"]
+
+    if eps is not None:
+        trial_cfg.optimizer.eps = float(eps)
+    elif "eps" in trial_cfg.optimizer:
+        del trial_cfg.optimizer["eps"]
 
     # Handle scheduler configuration
     if "scheduler_type" in params:
         scheduler_type = params["scheduler_type"]
+        base_scheduler_cfg = trial_cfg.scheduler if trial_cfg.scheduler is not None else OmegaConf.create({})
+
         if scheduler_type == "plateau":
-            trial_cfg.scheduler._target_ = "torch.optim.lr_scheduler.ReduceLROnPlateau"
-            trial_cfg.scheduler.mode = "max"
-            if "scheduler_patience" in params:
-                trial_cfg.scheduler.patience = int(params["scheduler_patience"])
-            if "scheduler_factor" in params:
-                trial_cfg.scheduler.factor = float(params["scheduler_factor"])
+            patience = int(params.get("scheduler_patience", base_scheduler_cfg.get("patience", 5)))
+            factor = float(params.get("scheduler_factor", base_scheduler_cfg.get("factor", 0.5)))
+            min_lr = float(base_scheduler_cfg.get("min_lr", 1e-7))
+            trial_cfg.scheduler = OmegaConf.create({
+                "_target_": "torch.optim.lr_scheduler.ReduceLROnPlateau",
+                "mode": "max",
+                "factor": factor,
+                "patience": patience,
+                "min_lr": min_lr,
+            })
         elif scheduler_type == "cosine":
-            trial_cfg.scheduler._target_ = "torch.optim.lr_scheduler.CosineAnnealingLR"
-            trial_cfg.scheduler.T_max = trial_cfg.training.num_epochs
+            eta_min = float(base_scheduler_cfg.get("min_lr", 0.0))
+            trial_cfg.scheduler = OmegaConf.create({
+                "_target_": "torch.optim.lr_scheduler.CosineAnnealingLR",
+                "T_max": max(1, int(trial_cfg.training.num_epochs)),
+                "eta_min": eta_min,
+            })
         elif scheduler_type == "linear":
-            trial_cfg.scheduler._target_ = "torch.optim.lr_scheduler.LinearLR"
-            if "warmup_steps" in params:
-                trial_cfg.scheduler.start_factor = 0.1
-                trial_cfg.scheduler.total_iters = int(params["warmup_steps"])
+            warmup_steps = max(1, int(params.get("warmup_steps", 1)))
+            trial_cfg.scheduler = OmegaConf.create({
+                "_target_": "torch.optim.lr_scheduler.LinearLR",
+                "start_factor": 0.1,
+                "end_factor": 1.0,
+                "total_iters": warmup_steps,
+            })
         elif scheduler_type == "exponential":
-            trial_cfg.scheduler._target_ = "torch.optim.lr_scheduler.ExponentialLR"
-            trial_cfg.scheduler.gamma = 0.9
+            gamma = float(params.get("scheduler_factor", base_scheduler_cfg.get("gamma", 0.9)))
+            trial_cfg.scheduler = OmegaConf.create({
+                "_target_": "torch.optim.lr_scheduler.ExponentialLR",
+                "gamma": gamma,
+            })
 
     # Handle loss function configuration
     if "loss_function" in params:
@@ -214,7 +293,7 @@ def apply_hyperparameters(cfg: DictConfig, params: Dict[str, Any]) -> DictConfig
         trial_cfg.loss.loss_type = loss_type
 
         # Apply loss-specific parameters based on loss type
-        if loss_type in ["focal", "adaptive_focal", "hybrid"]:
+        if loss_type in ["focal", "adaptive_focal", "hybrid_bce_focal", "hybrid_bce_adaptive_focal"]:
             if "alpha" in params:
                 trial_cfg.loss.alpha = float(params["alpha"])
             if "gamma" in params:
@@ -223,7 +302,7 @@ def apply_hyperparameters(cfg: DictConfig, params: Dict[str, Any]) -> DictConfig
         if loss_type == "adaptive_focal" and "delta" in params:
             trial_cfg.loss.delta = float(params["delta"])
 
-        if loss_type == "hybrid" and "bce_weight" in params:
+        if loss_type in ["hybrid_bce_focal", "hybrid_bce_adaptive_focal"] and "bce_weight" in params:
             trial_cfg.loss.bce_weight = float(params["bce_weight"])
 
         if loss_type == "weighted_bce" and "pos_weight" in params:
@@ -277,11 +356,8 @@ def main(cfg: DictConfig) -> None:
         print("❌ Optuna optimization is not enabled in the config.")
         return
 
-    # Create optimization output directory
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    study_name = cfg.optuna.study_name
-    optimization_dir = Path(f"outputs/optimization/{timestamp}_{study_name}")
-    optimization_dir.mkdir(parents=True, exist_ok=True)
+    requested_study_name = cfg.optuna.study_name
 
     # Configure pruner
     pruner = None
@@ -302,28 +378,87 @@ def main(cfg: DictConfig) -> None:
 
         print(f"🔧 Using pruner: {pruner_type}")
 
-    # Create study
-    study = optuna.create_study(
-        study_name=study_name,
-        direction=cfg.optuna.direction,
-        storage=cfg.optuna.get('storage'),
-        load_if_exists=cfg.optuna.get('load_if_exists', True),
-        pruner=pruner,
-    )
+    storage = cfg.optuna.get('storage')
+    load_if_exists = cfg.optuna.get('load_if_exists', True)
+
+    try:
+        study = optuna.create_study(
+            study_name=requested_study_name,
+            direction=cfg.optuna.direction,
+            storage=storage,
+            load_if_exists=load_if_exists,
+            pruner=pruner,
+        )
+    except optuna.exceptions.DuplicatedStudyError:
+        if load_if_exists and storage:
+            print(f"♻️  Study '{requested_study_name}' exists; loading existing study.")
+            study = optuna.load_study(study_name=requested_study_name, storage=storage)
+        else:
+            fallback_name = f"{requested_study_name}_{timestamp}"
+            print(f"⚠️  Study '{requested_study_name}' already exists. Using new study name '{fallback_name}'.")
+            study = optuna.create_study(
+                study_name=fallback_name,
+                direction=cfg.optuna.direction,
+                storage=storage,
+                load_if_exists=False,
+                pruner=pruner,
+            )
+
+    study_name = study.study_name
+    optimization_dir = Path(f"outputs/optimization/{timestamp}_{study_name}")
+    optimization_dir.mkdir(parents=True, exist_ok=True)
+
+    cleanup_trial_dirs = cfg.optuna.get('cleanup_trial_dirs', False)
+    keep_best_trial_dir = cfg.optuna.get('keep_best_trial_dir', True)
+    remove_best_after_export = cfg.optuna.get('remove_best_trial_dir_after_export', False)
+
+    artifact_root_value = cfg.optuna.get('artifact_root')
+    default_artifact_root = cfg.get('output_dir', 'outputs')
+    artifact_root: Optional[Path] = None
+    base_candidate = artifact_root_value or default_artifact_root
+    if base_candidate:
+        root_path = Path(base_candidate)
+        if not root_path.is_absolute():
+            root_path = Path.cwd() / root_path
+        artifact_root = root_path.resolve()
+
+    best_trial_value = float('-inf')
+    best_trial_dir: Optional[Path] = None
+    best_trial_number: Optional[int] = None
 
     # Set up objective function
     def objective(trial: optuna.Trial) -> float:
+        nonlocal best_trial_value, best_trial_dir, best_trial_number
+
         try:
-            return run_training_with_trial(cfg, trial)
+            value = run_training_with_trial(cfg, trial)
         except optuna.exceptions.TrialPruned:
-            # Re-raise pruned exceptions
+            if cleanup_trial_dirs:
+                cleanup_trial_output(trial.user_attrs.get('output_dir'), artifact_root, f"pruned trial {trial.number}")
             raise
         except Exception as e:
             print(f"❌ Trial {trial.number} failed with error: {e}")
             import traceback
             traceback.print_exc()
+            if cleanup_trial_dirs:
+                cleanup_trial_output(trial.user_attrs.get('output_dir'), artifact_root, f"failed trial {trial.number}")
             # Return a very low score instead of pruning to avoid corrupting the study
             return -1.0
+        else:
+            output_dir = trial.user_attrs.get('output_dir')
+
+            if value > best_trial_value:
+                previous_best_dir = best_trial_dir
+                best_trial_value = value
+                best_trial_dir = Path(output_dir) if output_dir else None
+                best_trial_number = trial.number
+
+                if cleanup_trial_dirs and previous_best_dir and best_trial_dir and previous_best_dir != best_trial_dir and not keep_best_trial_dir:
+                    cleanup_trial_output(str(previous_best_dir), artifact_root, f"superseded by trial {trial.number}")
+            elif cleanup_trial_dirs:
+                cleanup_trial_output(output_dir, artifact_root, f"non-best trial {trial.number}")
+
+            return value
 
     # Print optimization info
     print(f"🚀 Starting maxed out Optuna optimization...")
@@ -356,6 +491,9 @@ def main(cfg: DictConfig) -> None:
     try:
         save_best_configuration(study, cfg, optimization_dir)
         copy_best_trial_artifacts(study, optimization_dir)
+        export_trials_dataframe(study, optimization_dir)
+        if cleanup_trial_dirs and remove_best_after_export and best_trial_dir is not None:
+            cleanup_trial_output(str(best_trial_dir), artifact_root, f"post-export cleanup for trial {best_trial_number}", force=True)
     except Exception as e:
         print(f"⚠️  Warning: Could not save optimization results: {e}")
         # Save basic study information as fallback
