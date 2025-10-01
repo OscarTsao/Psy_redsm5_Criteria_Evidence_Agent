@@ -4,7 +4,7 @@ Simple test to validate pairwise data loading and model initialization.
 """
 
 import torch
-from data import make_pairwise_datasets
+from data import make_pairwise_datasets_from_groundtruth
 from model import get_pairwise_model
 
 def test_setup():
@@ -12,9 +12,8 @@ def test_setup():
 
     # Test data loading
     try:
-        train_ds, val_ds, test_ds, criteria_map = make_pairwise_datasets(
-            'Data/redsm5/redsm5_posts.csv',
-            'Data/redsm5/redsm5_annotations.csv',
+        train_ds, val_ds, test_ds, criteria_map = make_pairwise_datasets_from_groundtruth(
+            'Data/groundtruth/redsm5_ground_truth.json',
             'Data/DSM-5/DSM_Criteria_Array_Fixed_Major_Depressive.json',
             tokenizer_name='bert-base-uncased'
         )

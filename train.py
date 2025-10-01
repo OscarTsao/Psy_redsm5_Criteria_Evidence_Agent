@@ -20,7 +20,7 @@ from sklearn.metrics import precision_recall_fscore_support, roc_auc_score, accu
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from data import make_pairwise_datasets_from_groundtruth
+from data import make_pairwise_datasets
 from model import DynamicLossFactory, optimize_hardware_settings
 
 
@@ -368,11 +368,8 @@ def run_training(cfg: DictConfig) -> float:
     if trial is not None:
         trial.set_user_attr('output_dir', str(output_dir))
 
-    # Use groundtruth data instead of separate posts and annotations
-    groundtruth_path = "Data/groundtruth/redsm5_ground_truth.json"
-    train_ds, val_ds, test_ds, _ = make_pairwise_datasets_from_groundtruth(
-        groundtruth_path,
-        cfg.criteria_path,
+    train_ds, val_ds, test_ds, _ = make_pairwise_datasets(
+        criteria_path=cfg.criteria_path,
         tokenizer_name=cfg.model.model_name,
         seed=seed,
     )

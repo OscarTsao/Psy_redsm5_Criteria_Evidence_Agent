@@ -26,10 +26,9 @@
 
 ## Data Requirements
 
-- Expect CSV data under `Data/redsm5/` with posts and annotations and DSM criteria JSON in `Data/DSM-5/`.
-- Default paths in configs:
-  - `Data/redsm5/redsm5_posts.csv`
-  - `Data/redsm5/redsm5_annotations.csv`
+- Uses optimized groundtruth data in JSON format under `Data/groundtruth/` and DSM criteria JSON in `Data/DSM-5/`.
+- Data automatically loaded from:
+  - `Data/groundtruth/redsm5_ground_truth.json` (optimized JSON format)
   - `Data/DSM-5/DSM_Criteria_Array_Fixed_Major_Depressive.json`
 
 ## Hydra Configuration

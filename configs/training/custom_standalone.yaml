@@ -1,9 +1,8 @@
 # Standalone custom configuration with best hyperparameters from HPO study
 # No defaults inheritance to avoid config conflicts
 
-# Dataset paths
-posts_path: Data/redsm5/redsm5_posts.csv
-annotations_path: Data/redsm5/redsm5_annotations.csv
+# Dataset paths (groundtruth data used by default)
+groundtruth_path: Data/groundtruth/redsm5_ground_truth.json
 criteria_path: Data/DSM-5/DSM_Criteria_Array_Fixed_Major_Depressive.json
 
 # Model configuration

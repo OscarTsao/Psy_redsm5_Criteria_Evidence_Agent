@@ -103,8 +103,7 @@ def test_data_paths():
     print("\nTesting data file paths...")
 
     data_files = [
-        "Data/redsm5/redsm5_posts.csv",
-        "Data/redsm5/redsm5_annotations.csv",
+        "Data/groundtruth/redsm5_ground_truth.json",
         "Data/DSM-5/DSM_Criteria_Array_Fixed_Major_Depressive.json"
     ]
 

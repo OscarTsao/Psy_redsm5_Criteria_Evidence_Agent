@@ -72,25 +72,6 @@ def build_post_level_labels_from_groundtruth(groundtruth_path: str) -> pd.DataFr
     return pd.DataFrame(out_rows)
 
 
-def build_post_level_labels(posts_path: str, annotations_path: str) -> pd.DataFrame:
-    """Legacy function - kept for compatibility. Use build_post_level_labels_from_groundtruth instead."""
-    posts_df = pd.read_csv(posts_path)
-    ann_df = pd.read_csv(annotations_path)
-
-    symptom_mapping = create_symptom_mapping()
-    symptom_to_idx = {symptom: int(cid.split(".")[1]) - 1 for cid, symptom in symptom_mapping.items()}
-
-    out_rows = []
-    for post_id, post_text in posts_df[["post_id", "text"]].itertuples(index=False):
-        labels = np.zeros(9, dtype=np.float32)
-        subset = ann_df[(ann_df["post_id"] == post_id) & (ann_df["status"] == 1)]
-        for _, r in subset.iterrows():
-            symptom = str(r["DSM5_symptom"]).upper()
-            if symptom in symptom_to_idx:
-                labels[symptom_to_idx[symptom]] = 1.0
-        out_rows.append({"post_id": post_id, "text": post_text, "labels": labels})
-
-    return pd.DataFrame(out_rows)
 
 
 def expand_to_pairs(df: pd.DataFrame, criteria_map: Dict[str, str]) -> pd.DataFrame:
@@ -198,20 +179,31 @@ def make_pairwise_datasets_from_groundtruth(groundtruth_path: str,
     return to_ds(train_df), to_ds(val_df), to_ds(test_df), criteria_map
 
 
-def make_pairwise_datasets(posts_path: str,
-                           annotations_path: str,
-                           criteria_path: str,
+def make_pairwise_datasets(groundtruth_path: str = None,
+                           criteria_path: str = None,
+                           posts_path: str = None,
+                           annotations_path: str = None,
                            tokenizer_name: str = "bert-base-uncased",
                            train_frac: float = 0.8,
                            val_frac: float = 0.1,
                            seed: int = 42,
                            max_length: int = 512):
-    """Legacy function - kept for compatibility. Use make_pairwise_datasets_from_groundtruth instead."""
-    rng = np.random.default_rng(seed)
+    """Create pairwise datasets. Now uses groundtruth data by default."""
+    # Use groundtruth data as the primary method
+    if groundtruth_path is None:
+        groundtruth_path = "Data/groundtruth/redsm5_ground_truth.json"
+    if criteria_path is None:
+        criteria_path = "Data/DSM-5/DSM_Criteria_Array_Fixed_Major_Depressive.json"
 
-    post_df = build_post_level_labels(posts_path, annotations_path)
-    criteria_map = load_dsm5_criteria(criteria_path)
-    pairs_df = expand_to_pairs(post_df, criteria_map)
+    return make_pairwise_datasets_from_groundtruth(
+        groundtruth_path=groundtruth_path,
+        criteria_path=criteria_path,
+        tokenizer_name=tokenizer_name,
+        train_frac=train_frac,
+        val_frac=val_frac,
+        seed=seed,
+        max_length=max_length
+    )
 
     # Shuffle by post to avoid leakage across splits
     unique_posts = post_df["post_id"].values

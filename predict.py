@@ -16,7 +16,7 @@ from sklearn.metrics import accuracy_score, precision_recall_fscore_support, roc
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from data import make_pairwise_datasets_from_groundtruth
+from data import make_pairwise_datasets
 
 
 def autocast_context(use_amp: bool, dtype: torch.dtype):
@@ -272,11 +272,8 @@ def main() -> None:
 
     tokenizer_name = training_cfg.model.model_name
 
-    # Use groundtruth data instead of separate posts and annotations
-    groundtruth_path = "Data/groundtruth/redsm5_ground_truth.json"
-    split_datasets = make_pairwise_datasets_from_groundtruth(
-        groundtruth_path,
-        criteria_path,
+    split_datasets = make_pairwise_datasets(
+        criteria_path=criteria_path,
         tokenizer_name=tokenizer_name,
         seed=seed,
     )

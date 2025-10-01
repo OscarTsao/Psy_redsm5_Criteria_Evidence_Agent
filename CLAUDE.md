@@ -73,7 +73,7 @@ python predict.py --run outputs/training/20231215_143022 --split val
 - **`predict.py`**: Inference and evaluation with detailed metrics
 
 ### Data Flow
-1. Raw data (`redsm5_posts.csv`, `redsm5_annotations.csv`) → preprocessing
+1. Groundtruth data (`redsm5_ground_truth.json`) → efficient JSON loading
 2. DSM-5 criteria mapping from JSON → symptom labels
 3. Expand to (post, criterion) pairs → tokenization as [CLS]post[SEP]criteria[SEP]
 4. BERT embeddings → pairwise binary classification for each (post, criterion) pair
@@ -102,12 +102,11 @@ python predict.py --run outputs/training/20231215_143022 --split val
 
 ```
 Data/
-├── redsm5/
-│   ├── redsm5_posts.csv          # Reddit posts text data
-│   └── redsm5_annotations.csv    # Ground truth annotations
-├── DSM-5/
-│   └── DSM_Criteria_Array_Fixed_Major_Depressive.json  # Criteria definitions
-└── groundtruth/                  # Additional reference data
+├── groundtruth/
+│   ├── redsm5_ground_truth.json  # Optimized groundtruth data (JSON format)
+│   └── redsm5_ground_truth.csv   # Alternative CSV format (slower)
+└── DSM-5/
+    └── DSM_Criteria_Array_Fixed_Major_Depressive.json  # Criteria definitions
 ```
 
 ## Output Files
