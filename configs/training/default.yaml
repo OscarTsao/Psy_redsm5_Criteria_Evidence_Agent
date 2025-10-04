@@ -1,0 +1,165 @@
+# Default training configuration
+
+# Dataset paths (groundtruth data used by default)
+groundtruth_path: Data/groundtruth/redsm5_ground_truth.json
+criteria_path: Data/DSM-5/DSM_Criteria_Array_Fixed_Major_Depressive.json
+
+# Model
+model:
+  _target_: model.get_pairwise_model
+  model_name: bert-base-uncased
+  device: null # auto-detect
+  dropout: 0.1
+
+# Data loaders
+# Evaluation batch size (kept consistent between val and test)
+eval_batch_size: 64
+
+train_loader:
+  batch_size: 64
+  shuffle: true
+  num_workers: null # auto-detect based on CPU cores
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 4
+  drop_last: false
+
+val_loader:
+  batch_size: 64 # Consistent evaluation batch size (kept in sync programmatically)
+  shuffle: false
+  num_workers: null # auto-detect based on CPU cores
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 2
+  drop_last: false
+
+test_loader:
+  batch_size: 64 # Consistent evaluation batch size (kept in sync programmatically)
+  shuffle: false
+  num_workers: null # auto-detect based on CPU cores
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 2
+  drop_last: false
+
+# Training settings
+training:
+  num_epochs: 100
+  gradient_accumulation_steps: 1
+  clip_grad_norm: 1.0
+  use_compile: true
+  use_amp: true
+  amp_dtype: float16
+  use_grad_checkpointing: true
+  threshold: 0.01
+  max_steps_per_epoch: null
+  max_checkpoints: 5
+  early_stopping_patience: 10
+  save_checkpoints: true
+  save_best_only: false
+  save_optimizer_state: true
+  save_history: true
+  include_history_in_checkpoint: true
+  save_config_in_checkpoint: true
+
+# Optimization
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 2e-5
+  weight_decay: 0.01
+
+# Loss
+loss:
+  _target_: model.AdaptiveFocalLoss
+  alpha: 0.25
+  gamma: 2.0
+  delta: 1.0
+  reduction: mean
+
+# Scheduler
+scheduler:
+  _target_: torch.optim.lr_scheduler.ReduceLROnPlateau
+  mode: max
+  factor: 0.5
+  patience: 5
+  min_lr: 1e-7
+
+# Evaluation
+save_top_k: 1
+monitor_metric: f1
+monitor_mode: max
+
+# Paths
+output_dir: outputs/training
+
+# Hardware
+hardware:
+  dataloader_pin_memory: true
+  enable_tf32: true
+  cudnn_benchmark: true
+  use_bfloat16_if_available: true
+
+# Optuna configuration (enabled via overrides)
+optuna:
+  enabled: false
+  n_trials: 200
+  direction: maximize
+  timeout: null
+  seed: 42
+  study_name: hybrid_loss_hpo
+  storage: null # e.g., sqlite:///optuna.db
+  load_if_exists: true
+  cleanup_trial_dirs: false
+  keep_best_trial_dir: true
+  remove_best_trial_dir_after_export: false
+  artifact_root: null
+
+search_space:
+  train_batch_size:
+    method: categorical
+    choices: [8, 16, 32, 48, 64, 96, 128]
+  eval_batch_size:
+    method: categorical
+    choices: [32, 48, 64, 96, 128]
+  learning_rate:
+    method: loguniform
+    low: 1e-06
+    high: 5e-05
+  weight_decay:
+    method: loguniform
+    low: 1e-06
+    high: 1e-02
+  alpha:
+    method: uniform
+    low: 0.1
+    high: 0.5
+  gamma:
+    method: uniform
+    low: 1.0
+    high: 4.0
+  delta:
+    method: uniform
+    low: 0.5
+    high: 2.0
+  dropout:
+    method: uniform
+    low: 0.0
+    high: 0.4
+  clip_grad_norm:
+    method: uniform
+    low: 0.5
+    high: 2.0
+  threshold:
+    method: uniform
+    low: 0.1
+    high: 0.9
+  gradient_accumulation_steps:
+    method: categorical
+    choices: [1, 2, 4]
+
+# Hydra overrides for sweeps
+hydra:
+  run:
+    dir: outputs/training/${now:%Y%m%d_%H%M%S}
+  sweep:
+    dir: outputs/training/multirun/${now:%Y%m%d_%H%M%S}

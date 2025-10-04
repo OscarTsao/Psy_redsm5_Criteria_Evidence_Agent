@@ -1,0 +1,81 @@
+groundtruth_path: Data/groundtruth/redsm5_ground_truth.json
+criteria_path: Data/DSM-5/DSM_Criteria_Array_Fixed_Major_Depressive.json
+model:
+  _target_: model.get_pairwise_model
+  model_name: bert-base-uncased
+  device: null
+  dropout: 0.05537922495755971
+eval_batch_size: 256
+train_loader:
+  batch_size: 48
+  shuffle: true
+  num_workers: null
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 4
+  drop_last: false
+val_loader:
+  batch_size: 256
+  shuffle: false
+  num_workers: null
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 2
+  drop_last: false
+test_loader:
+  batch_size: 256
+  shuffle: false
+  num_workers: null
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 2
+  drop_last: false
+training:
+  num_epochs: 75
+  gradient_accumulation_steps: 1
+  clip_grad_norm: 3.468194378044588
+  use_compile: true
+  use_amp: true
+  amp_dtype: float16
+  use_grad_checkpointing: false
+  threshold: 0.8016581265265705
+  max_steps_per_epoch: null
+  max_checkpoints: 1
+  early_stopping_patience: 15
+  save_checkpoints: true
+  save_best_only: true
+  save_optimizer_state: false
+  save_history: false
+  include_history_in_checkpoint: false
+  save_config_in_checkpoint: true
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 1.6405857489053592e-05
+  weight_decay: 0.002698215442204917
+  betas:
+  - 0.9216145711903463
+  - 0.9917644929558218
+  eps: 8.386092544159506e-07
+loss:
+  _target_: model.DynamicLossFactory.create_loss
+  alpha: 0.25
+  gamma: 2.0
+  delta: 1.0
+  reduction: mean
+  loss_type: weighted_bce
+  pos_weight: 3.6312415384751007
+scheduler:
+  _target_: torch.optim.lr_scheduler.LinearLR
+  start_factor: 0.1
+  end_factor: 1.0
+  total_iters: 1
+save_top_k: 1
+monitor_metric: f1
+monitor_mode: max
+output_dir: outputs/training
+hardware:
+  dataloader_pin_memory: true
+  enable_tf32: true
+  cudnn_benchmark: true
+  use_bfloat16_if_available: true
+max_checkpoints: 3

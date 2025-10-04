@@ -1,0 +1,16 @@
+# BCE training configuration
+
+defaults:
+  - default
+
+# Override loss function to use BCE
+loss:
+  _target_: model.DynamicLossFactory.create_loss
+  loss_type: bce
+  reduction: mean
+
+# Simpler training parameters for BCE baseline
+training:
+  num_epochs: 50
+  threshold: 0.5
+  early_stopping_patience: 7

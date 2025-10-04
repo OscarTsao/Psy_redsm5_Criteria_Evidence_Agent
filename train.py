@@ -1,278 +1,563 @@
-import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader
-from torch.optim import AdamW
-from transformers import get_linear_schedule_with_warmup
-import numpy as np
-from tqdm import tqdm
-import argparse
-import os
+from __future__ import annotations
+
 import json
+import os
+import glob
+import multiprocessing as mp
 from datetime import datetime
-from sklearn.metrics import precision_recall_fscore_support, accuracy_score, hamming_loss, roc_auc_score
+from pathlib import Path
+from typing import Dict
 
-from data_preprocessing import prepare_data, split_data, create_datasets, create_symptom_mapping
-from model import SpanBERTForDSM5Classification, FocalLoss, get_model
+import hydra
+import numpy as np
+import optuna
+import torch
+import yaml
+from hydra.utils import instantiate
+from omegaconf import DictConfig, OmegaConf
+from torch.amp import GradScaler
+from sklearn.metrics import precision_recall_fscore_support, roc_auc_score, accuracy_score
+from torch.utils.data import DataLoader
+from tqdm import tqdm
 
-class Trainer:
-    def __init__(self, model, device, train_loader, val_loader, optimizer, scheduler, criterion, config):
-        self.model = model
-        self.device = device
-        self.train_loader = train_loader
-        self.val_loader = val_loader
-        self.optimizer = optimizer
-        self.scheduler = scheduler
-        self.criterion = criterion
-        self.config = config
-        self.best_val_f1 = 0
-        self.patience_counter = 0
+from data import make_pairwise_datasets
+from model import DynamicLossFactory, optimize_hardware_settings
 
-    def train_epoch(self):
-        self.model.train()
-        total_loss = 0
-        all_predictions = []
-        all_labels = []
 
-        progress_bar = tqdm(self.train_loader, desc='Training')
-        for batch in progress_bar:
-            input_ids = batch['input_ids'].to(self.device)
-            attention_mask = batch['attention_mask'].to(self.device)
-            labels = batch['labels'].to(self.device)
 
-            self.optimizer.zero_grad()
-
-            logits = self.model(input_ids, attention_mask)
-            loss = self.criterion(logits, labels)
-
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config['max_grad_norm'])
-
-            self.optimizer.step()
-            self.scheduler.step()
-
-            total_loss += loss.item()
-
-            with torch.no_grad():
-                predictions = torch.sigmoid(logits) > self.config['threshold']
-                all_predictions.extend(predictions.cpu().numpy())
-                all_labels.extend(labels.cpu().numpy())
-
-            progress_bar.set_postfix({'loss': loss.item()})
-
-        avg_loss = total_loss / len(self.train_loader)
-        metrics = self.calculate_metrics(np.array(all_labels), np.array(all_predictions))
-
-        return avg_loss, metrics
-
-    def validate(self):
-        self.model.eval()
-        total_loss = 0
-        all_predictions = []
-        all_labels = []
-        all_probs = []
-
-        with torch.no_grad():
-            progress_bar = tqdm(self.val_loader, desc='Validation')
-            for batch in progress_bar:
-                input_ids = batch['input_ids'].to(self.device)
-                attention_mask = batch['attention_mask'].to(self.device)
-                labels = batch['labels'].to(self.device)
-
-                logits = self.model(input_ids, attention_mask)
-                loss = self.criterion(logits, labels)
-
-                total_loss += loss.item()
-
-                probs = torch.sigmoid(logits)
-                predictions = probs > self.config['threshold']
-
-                all_predictions.extend(predictions.cpu().numpy())
-                all_labels.extend(labels.cpu().numpy())
-                all_probs.extend(probs.cpu().numpy())
-
-        avg_loss = total_loss / len(self.val_loader)
-        metrics = self.calculate_metrics(np.array(all_labels), np.array(all_predictions), np.array(all_probs))
-
-        return avg_loss, metrics
-
-    def calculate_metrics(self, labels, predictions, probs=None):
-        precision, recall, f1, _ = precision_recall_fscore_support(labels, predictions, average='macro', zero_division=0)
-
-        precision_micro, recall_micro, f1_micro, _ = precision_recall_fscore_support(labels, predictions, average='micro', zero_division=0)
-
-        h_loss = hamming_loss(labels, predictions)
-
-        exact_match = accuracy_score(labels, predictions)
-
-        metrics = {
-            'precision_macro': precision,
-            'recall_macro': recall,
-            'f1_macro': f1,
-            'precision_micro': precision_micro,
-            'recall_micro': recall_micro,
-            'f1_micro': f1_micro,
-            'hamming_loss': h_loss,
-            'exact_match_ratio': exact_match
-        }
-
-        if probs is not None:
-            try:
-                auc_macro = roc_auc_score(labels, probs, average='macro')
-                auc_micro = roc_auc_score(labels, probs, average='micro')
-                metrics['auc_macro'] = auc_macro
-                metrics['auc_micro'] = auc_micro
-            except:
-                pass
-
-        per_class_metrics = []
-        symptom_names = list(create_symptom_mapping().values())
-        for i in range(labels.shape[1]):
-            p, r, f, _ = precision_recall_fscore_support(labels[:, i], predictions[:, i], average='binary', zero_division=0)
-            per_class_metrics.append({
-                'symptom': symptom_names[i] if i < len(symptom_names) else f'Criterion_{i+1}',
-                'precision': p,
-                'recall': r,
-                'f1': f
-            })
-
-        metrics['per_class'] = per_class_metrics
-
-        return metrics
-
-    def train(self):
-        train_history = []
-        val_history = []
-
-        for epoch in range(self.config['num_epochs']):
-            print(f"\nEpoch {epoch + 1}/{self.config['num_epochs']}")
-
-            train_loss, train_metrics = self.train_epoch()
-            val_loss, val_metrics = self.validate()
-
-            train_history.append({
-                'epoch': epoch + 1,
-                'loss': train_loss,
-                **train_metrics
-            })
-
-            val_history.append({
-                'epoch': epoch + 1,
-                'loss': val_loss,
-                **val_metrics
-            })
-
-            print(f"Train Loss: {train_loss:.4f}, F1 Macro: {train_metrics['f1_macro']:.4f}")
-            print(f"Val Loss: {val_loss:.4f}, F1 Macro: {val_metrics['f1_macro']:.4f}")
-
-            if val_metrics['f1_macro'] > self.best_val_f1:
-                self.best_val_f1 = val_metrics['f1_macro']
-                self.save_checkpoint(epoch + 1, val_metrics)
-                self.patience_counter = 0
-            else:
-                self.patience_counter += 1
-
-            if self.patience_counter >= self.config['patience']:
-                print(f"Early stopping triggered after {epoch + 1} epochs")
-                break
-
-        return train_history, val_history
-
-    def save_checkpoint(self, epoch, metrics):
-        checkpoint_path = os.path.join(self.config['output_dir'], 'best_model.pt')
-        torch.save({
-            'epoch': epoch,
-            'model_state_dict': self.model.state_dict(),
-            'optimizer_state_dict': self.optimizer.state_dict(),
-            'scheduler_state_dict': self.scheduler.state_dict(),
-            'best_f1': self.best_val_f1,
-            'metrics': metrics,
-            'config': self.config
-        }, checkpoint_path)
-        print(f"Model checkpoint saved with F1: {self.best_val_f1:.4f}")
-
-def main():
-    parser = argparse.ArgumentParser(description='Train SpanBERT for DSM-5 Criteria Classification')
-    parser.add_argument('--posts_path', type=str, default='Data/redsm5/redsm5_posts.csv')
-    parser.add_argument('--annotations_path', type=str, default='Data/redsm5/redsm5_annotations.csv')
-    parser.add_argument('--criteria_path', type=str, default='Data/DSM-5/DSM_Criteria_Array_Fixed_Major_Depressive.json')
-    parser.add_argument('--model_name', type=str, default='SpanBERT/spanbert-base-cased')
-    parser.add_argument('--batch_size', type=int, default=16)
-    parser.add_argument('--num_epochs', type=int, default=20)
-    parser.add_argument('--learning_rate', type=float, default=2e-5)
-    parser.add_argument('--warmup_ratio', type=float, default=0.1)
-    parser.add_argument('--max_grad_norm', type=float, default=1.0)
-    parser.add_argument('--dropout', type=float, default=0.1)
-    parser.add_argument('--threshold', type=float, default=0.5)
-    parser.add_argument('--patience', type=int, default=5)
-    parser.add_argument('--use_focal_loss', action='store_true', help='Use Focal Loss instead of BCEWithLogitsLoss')
-    parser.add_argument('--output_dir', type=str, default='outputs')
-    parser.add_argument('--seed', type=int, default=42)
-
-    args = parser.parse_args()
-
-    torch.manual_seed(args.seed)
-    np.random.seed(args.seed)
-
-    if not os.path.exists(args.output_dir):
-        os.makedirs(args.output_dir)
-
-    print("Loading and preprocessing data...")
-    df = prepare_data(args.posts_path, args.annotations_path, args.criteria_path)
-    train_df, val_df, test_df = split_data(df)
-
-    print(f"Data split - Train: {len(train_df)}, Val: {len(val_df)}, Test: {len(test_df)}")
-
-    train_dataset, val_dataset, test_dataset, tokenizer = create_datasets(
-        train_df, val_df, test_df, args.model_name
-    )
-
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
-    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
-
-    print("Initializing model...")
-    model, device = get_model(args.model_name, num_criteria=9)
-
-    if args.use_focal_loss:
-        criterion = FocalLoss()
-    else:
-        criterion = nn.BCEWithLogitsLoss()
-
-    optimizer = AdamW(model.parameters(), lr=args.learning_rate)
-
-    total_steps = len(train_loader) * args.num_epochs
-    warmup_steps = int(total_steps * args.warmup_ratio)
-    scheduler = get_linear_schedule_with_warmup(
-        optimizer,
-        num_warmup_steps=warmup_steps,
-        num_training_steps=total_steps
-    )
-
-    config = {
-        'num_epochs': args.num_epochs,
-        'learning_rate': args.learning_rate,
-        'batch_size': args.batch_size,
-        'max_grad_norm': args.max_grad_norm,
-        'threshold': args.threshold,
-        'patience': args.patience,
-        'output_dir': args.output_dir,
-        'model_name': args.model_name
+def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray, y_prob: np.ndarray) -> Dict[str, float]:
+    precision, recall, f1, _ = precision_recall_fscore_support(y_true, y_pred, average='binary', zero_division=0)
+    try:
+        auc = roc_auc_score(y_true, y_prob)
+    except Exception:
+        auc = None
+    acc = accuracy_score(y_true, y_pred)
+    return {
+        'precision': float(precision),
+        'recall': float(recall),
+        'f1': float(f1),
+        'auc': None if auc is None else float(auc),
+        'accuracy': float(acc),
     }
 
-    trainer = Trainer(model, device, train_loader, val_loader, optimizer, scheduler, criterion, config)
 
-    print("Starting training...")
-    train_history, val_history = trainer.train()
+def seed_everything(seed: int) -> None:
+    import random
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
-    history_path = os.path.join(args.output_dir, 'training_history.json')
-    with open(history_path, 'w') as f:
-        json.dump({
-            'train': train_history,
-            'validation': val_history,
-            'config': config
-        }, f, indent=2)
 
-    print(f"Training completed. Best validation F1: {trainer.best_val_f1:.4f}")
+def build_dataloaders(train_ds, val_ds, test_ds, cfg):
+    def make_loader(ds, params, fallback_shuffle=False):
+        batch_size = params.batch_size
+        num_workers = params.num_workers
+        if num_workers is None:
+            num_workers = max(4, os.cpu_count() or 4)
 
-if __name__ == "__main__":
+        shuffle = params.get("shuffle", fallback_shuffle)
+        drop_last = params.get("drop_last", False)
+        prefetch_factor = params.get("prefetch_factor", None)
+        persistent_workers = params.get("persistent_workers", False)
+
+        if num_workers > 0:
+            try:
+                test_lock = mp.get_context().Lock()
+                del test_lock
+            except (RuntimeError, OSError, PermissionError):
+                print("⚠️  System does not permit multiprocessing locks; falling back to num_workers=0.")
+                num_workers = 0
+
+        if num_workers == 0:
+            prefetch_factor = None
+            persistent_workers = False
+
+        loader_kwargs = {
+            "batch_size": batch_size,
+            "shuffle": shuffle,
+            "num_workers": num_workers,
+            "pin_memory": params.get("pin_memory", True),
+            "persistent_workers": persistent_workers and num_workers > 0,
+            "drop_last": drop_last,
+        }
+        if prefetch_factor is not None:
+            loader_kwargs["prefetch_factor"] = prefetch_factor
+
+        try:
+            return DataLoader(ds, **loader_kwargs)
+        except (RuntimeError, OSError, PermissionError, ValueError) as exc:
+            if num_workers > 0:
+                print(f"⚠️  DataLoader worker startup failed ({exc}); retrying with num_workers=0.")
+                loader_kwargs["num_workers"] = 0
+                loader_kwargs["persistent_workers"] = False
+                loader_kwargs.pop("prefetch_factor", None)
+                return DataLoader(ds, **loader_kwargs)
+            raise
+
+    train_loader = make_loader(train_ds, cfg.train_loader, fallback_shuffle=True)
+    val_loader = make_loader(val_ds, cfg.val_loader)
+    test_loader = make_loader(test_ds, cfg.test_loader)
+    return train_loader, val_loader, test_loader
+
+
+def autocast_context(use_amp: bool, dtype: torch.dtype):
+    if not use_amp:
+        return torch.autocast(device_type="cuda" if torch.cuda.is_available() else "cpu", dtype=dtype, enabled=False)
+    return torch.autocast(device_type="cuda" if torch.cuda.is_available() else "cpu", dtype=dtype)
+
+
+def forward_loss(model, batch, criterion, device, use_amp=False, amp_dtype=torch.float16):
+    input_ids = batch['input_ids'].to(device)
+    attention_mask = batch['attention_mask'].to(device)
+    labels = batch['labels'].to(device)
+
+    with autocast_context(use_amp, amp_dtype):
+        logits = model(input_ids, attention_mask)
+        loss = criterion(logits, labels)
+    return loss, logits
+
+
+def train_one_epoch(
+    model,
+    train_loader,
+    optimizer,
+    criterion,
+    device,
+    gradient_accumulation_steps,
+    clip_grad_norm,
+    use_amp,
+    scaler,
+    amp_dtype,
+    max_steps_per_epoch: int | None = None,
+):
+    model.train()
+    total_loss = 0.0
+    accumulated_loss = 0.0
+    optimizer_steps = 0
+
+    optimizer.zero_grad()
+    for step, batch in enumerate(tqdm(train_loader, desc='Train', leave=False)):
+        loss, _ = forward_loss(model, batch, criterion, device, use_amp, amp_dtype)
+        # Average loss across accumulation steps so gradients match full batch size
+        loss = loss / gradient_accumulation_steps
+
+        if scaler and use_amp:
+            scaler.scale(loss).backward()
+        else:
+            loss.backward()
+
+        accumulated_loss += loss.item()
+
+        if (step + 1) % gradient_accumulation_steps == 0:
+            if scaler and use_amp:
+                scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad_norm)
+            if scaler and use_amp:
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                optimizer.step()
+            optimizer.zero_grad()
+
+            total_loss += accumulated_loss
+            accumulated_loss = 0.0
+            optimizer_steps += 1
+
+            if max_steps_per_epoch is not None and optimizer_steps >= max_steps_per_epoch:
+                break
+
+    if accumulated_loss > 0:
+        if scaler and use_amp:
+            scaler.unscale_(optimizer)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad_norm)
+        if scaler and use_amp:
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            optimizer.step()
+        optimizer.zero_grad()
+        total_loss += accumulated_loss
+        optimizer_steps += 1
+
+    if optimizer_steps == 0:
+        return 0.0
+
+    return total_loss / optimizer_steps
+
+
+def evaluate_model(model, loader, device, threshold: float = 0.5, use_amp: bool = True, amp_dtype=torch.float16):
+    model.eval()
+    all_y, all_pred, all_prob, all_cidx = [], [], [], []
+    with torch.no_grad():
+        for batch in tqdm(loader, desc='Eval', leave=False):
+            input_ids = batch['input_ids'].to(device)
+            attention_mask = batch['attention_mask'].to(device)
+            labels = batch['labels'].to(device)
+            cidx = batch['criterion_idx'].cpu().numpy()
+
+            with autocast_context(use_amp, amp_dtype):
+                logits = model(input_ids, attention_mask)
+
+            probs = torch.sigmoid(logits)
+            preds = (probs > threshold).float()
+
+            all_y.append(labels.cpu().numpy())
+            all_pred.append(preds.cpu().numpy())
+            all_prob.append(probs.cpu().numpy())
+            all_cidx.append(cidx)
+
+    y = np.concatenate(all_y)
+    y_hat = np.concatenate(all_pred)
+    y_prob = np.concatenate(all_prob)
+    cidx = np.concatenate(all_cidx)
+
+    overall = compute_metrics(y, y_hat, y_prob)
+
+    per_criteria = []
+    for i in range(9):
+        subset = cidx == i
+        if subset.any():
+            m = compute_metrics(y[subset], y_hat[subset], y_prob[subset])
+        else:
+            m = {k: float('nan') for k in ['precision', 'recall', 'f1', 'auc', 'accuracy']}
+        # Keep track of criteria index so downstream reporting can join on metadata
+        m['criteria_idx'] = i
+        per_criteria.append(m)
+
+    return overall, per_criteria
+
+
+def cleanup_old_checkpoints(output_dir: Path, max_checkpoints: int = 5):
+    """Keep only the most recent checkpoints, excluding best_model.pt"""
+    checkpoint_pattern = str(output_dir / 'checkpoint_epoch_*.pt')
+    checkpoints = glob.glob(checkpoint_pattern)
+
+    if len(checkpoints) > max_checkpoints:
+        # Sort by modification time (oldest first)
+        checkpoints.sort(key=lambda x: os.path.getmtime(x))
+        # Remove oldest checkpoints
+        for old_checkpoint in checkpoints[:-max_checkpoints]:
+            try:
+                os.remove(old_checkpoint)
+                print(f"Removed old checkpoint: {os.path.basename(old_checkpoint)}")
+            except OSError as e:
+                print(f"Warning: Could not remove {old_checkpoint}: {e}")
+
+
+def save_history_and_checkpoint(
+    output_dir: Path,
+    model,
+    optimizer,
+    cfg,
+    history,
+    metrics,
+    epoch,
+    best: bool = False,
+    max_checkpoints: int = 5,
+):
+    training_cfg = cfg.get('training', cfg)
+    save_checkpoints = training_cfg.get('save_checkpoints', True)
+    save_best_only = training_cfg.get('save_best_only', False)
+    save_optimizer_state = training_cfg.get('save_optimizer_state', True)
+    save_history_file = training_cfg.get('save_history', True)
+    include_history_in_checkpoint = training_cfg.get('include_history_in_checkpoint', True)
+    save_config_in_checkpoint = training_cfg.get('save_config_in_checkpoint', True)
+
+    should_save_ckpt = save_checkpoints and (best or not save_best_only)
+
+    if should_save_ckpt:
+        ckpt = {
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'metrics': metrics,
+        }
+
+        if save_optimizer_state:
+            ckpt['optimizer_state_dict'] = optimizer.state_dict()
+
+        if save_config_in_checkpoint:
+            ckpt['config'] = OmegaConf.to_container(cfg, resolve=True)
+
+        if include_history_in_checkpoint:
+            ckpt['history'] = history
+
+        ckpt_name = output_dir / ('best_model.pt' if best else f'checkpoint_epoch_{epoch}.pt')
+        torch.save(ckpt, ckpt_name)
+
+        if not best and max_checkpoints and max_checkpoints > 0:
+            cleanup_old_checkpoints(output_dir, max_checkpoints)
+
+    if save_history_file:
+        history_path = output_dir / 'history.json'
+        with open(history_path, 'w') as f:
+            json.dump(history, f, indent=2)
+
+
+def extract_config(cfg: DictConfig) -> DictConfig:
+    if 'posts_path' in cfg:
+        return cfg
+    if 'training' in cfg and isinstance(cfg.training, DictConfig):
+        return cfg.training
+    raise ValueError("Configuration missing required keys (posts_path, training, etc.)")
+
+
+def run_training(cfg: DictConfig) -> float:
+    # Apply hardware optimizations first
+    from model import optimize_hardware_settings
+    optimize_hardware_settings()
+
+    trial = cfg.get("trial")
+    if trial is not None:
+        OmegaConf.set_struct(cfg, False)
+        apply_trial_suggestions(cfg, trial)
+        OmegaConf.set_struct(cfg, True)
+
+    seed = cfg.get('seed', 42)
+    seed_everything(seed)
+
+    output_dir = ensure_output_dir(cfg)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save standalone config.yaml for reproducibility (skip if Hydra already saved it)
+    hydra_config_path = output_dir / '.hydra' / 'config.yaml'
+    if not hydra_config_path.exists():
+        config_path = output_dir / 'config.yaml'
+        with open(config_path, 'w') as f:
+            yaml.dump(OmegaConf.to_container(cfg, resolve=True), f, default_flow_style=False, sort_keys=False)
+        print(f"💾 Configuration saved to: {config_path}")
+    else:
+        print(f"💾 Configuration already saved by Hydra to: {hydra_config_path}")
+
+    # Store output directory in trial for artifact copying
+    if trial is not None:
+        trial.set_user_attr('output_dir', str(output_dir))
+
+    # Respect the configured data locations so sweeps can swap datasets cleanly
+    train_ds, val_ds, test_ds, _ = make_pairwise_datasets(
+        groundtruth_path=cfg.groundtruth_path,
+        criteria_path=cfg.criteria_path,
+        tokenizer_name=cfg.model.model_name,
+        seed=seed,
+    )
+
+    model, device = instantiate(cfg.model)
+    if cfg.training.get("use_grad_checkpointing", False) and hasattr(model.encoder, 'gradient_checkpointing_enable'):
+        model.encoder.gradient_checkpointing_enable()
+
+    if cfg.training.use_compile and hasattr(torch, 'compile'):
+        model = torch.compile(model)
+
+    # Enhanced loss function instantiation with dynamic factory support
+    if hasattr(cfg.loss, 'loss_type'):
+        from model import DynamicLossFactory
+        loss_params = {k: v for k, v in cfg.loss.items() if k not in ['_target_', 'loss_type']}
+        criterion = DynamicLossFactory.create_loss(cfg.loss.loss_type, **loss_params)
+    else:
+        criterion = instantiate(cfg.loss)
+
+    optimizer = instantiate(cfg.optimizer, params=model.parameters())
+    scheduler = instantiate(cfg.scheduler, optimizer=optimizer) if cfg.scheduler else None
+
+    train_loader, val_loader, test_loader = build_dataloaders(train_ds, val_ds, test_ds, cfg)
+
+    amp_device_type = 'cuda' if torch.cuda.is_available() else 'cpu'
+    use_amp = bool(cfg.training.use_amp and amp_device_type == 'cuda')
+
+    # GradScaler automatically disables scaling on CPU while keeping call-sites uniform
+    scaler = GradScaler(amp_device_type, enabled=use_amp)
+
+    best_metric = -float('inf')
+    history = []
+    patience_counter = 0
+    early_stopping_patience = cfg.training.get('early_stopping_patience', 10)
+    best_checkpoint_path = output_dir / 'best_model.pt'
+
+    amp_dtype = getattr(torch, cfg.training.amp_dtype) if isinstance(cfg.training.amp_dtype, str) else cfg.training.amp_dtype
+    if amp_device_type != 'cuda':
+        amp_dtype = torch.float32
+
+    for epoch in range(1, cfg.training.num_epochs + 1):
+        train_loss = train_one_epoch(
+            model,
+            train_loader,
+            optimizer,
+            criterion,
+            device,
+            cfg.training.gradient_accumulation_steps,
+            cfg.training.clip_grad_norm,
+            use_amp,
+            scaler,
+            amp_dtype,
+            cfg.training.get('max_steps_per_epoch'),
+        )
+
+        val_metrics, val_per = evaluate_model(
+            model,
+            val_loader,
+            device,
+            threshold=cfg.training.threshold,
+            use_amp=use_amp,
+            amp_dtype=amp_dtype,
+        )
+
+        if scheduler:
+            if hasattr(scheduler, 'step') and 'ReduceLROnPlateau' in str(type(scheduler)):
+                scheduler.step(val_metrics.get(cfg.monitor_metric, 0.0))
+            else:
+                scheduler.step()
+
+        history.append({
+            'epoch': epoch,
+            'train_loss': train_loss,
+            'val_overall': val_metrics,
+        })
+
+        metric_value = val_metrics.get(cfg.monitor_metric, 0.0)
+        is_best = metric_value > best_metric
+        if is_best:
+            best_metric = metric_value
+            patience_counter = 0
+        else:
+            patience_counter += 1
+
+        metrics_payload = {
+            'train_loss': train_loss,
+            'val_overall': val_metrics,
+            'val_per_criteria': val_per,
+        }
+        max_checkpoints = cfg.training.get('max_checkpoints', 5)
+        save_history_and_checkpoint(output_dir, model, optimizer, cfg, history, metrics_payload, epoch, best=is_best, max_checkpoints=max_checkpoints)
+
+        status = f"Epoch {epoch}: train_loss={train_loss:.4f} val_{cfg.monitor_metric}={metric_value:.4f}"
+        if is_best:
+            status += " (new best)"
+        else:
+            status += f" (patience: {patience_counter}/{early_stopping_patience})"
+        print(status)
+
+        # Optuna pruning check
+        trial = cfg.get('trial')
+        if trial is not None:
+            trial.report(metric_value, epoch)
+            if trial.should_prune():
+                print(f"Trial pruned at epoch {epoch}")
+                raise optuna.exceptions.TrialPruned()
+
+        # Early stopping check
+        if patience_counter >= early_stopping_patience:
+            print(f"Early stopping triggered after {epoch} epochs (patience: {early_stopping_patience})")
+            break
+
+    checkpoint_source = 'final_model'
+    if best_checkpoint_path.exists():
+        try:
+            checkpoint = torch.load(best_checkpoint_path, map_location=device)
+            state_dict = checkpoint.get('model_state_dict', checkpoint)
+            load_result = model.load_state_dict(state_dict)
+            missing_keys = getattr(load_result, 'missing_keys', [])
+            unexpected_keys = getattr(load_result, 'unexpected_keys', [])
+            if missing_keys or unexpected_keys:
+                print(
+                    "⚠️  Loaded best checkpoint with mismatched keys. "
+                    f"Missing: {missing_keys} Unexpected: {unexpected_keys}. Evaluating anyway."
+                )
+            checkpoint_source = 'best_model.pt'
+        except Exception as exc:
+            print(f"⚠️  Could not load best_model.pt for evaluation ({exc}); using final model weights instead.")
+    else:
+        print("⚠️  best_model.pt not found; evaluating final epoch weights.")
+
+    test_metrics, test_per = evaluate_model(
+        model,
+        test_loader,
+        device,
+        threshold=cfg.training.threshold,
+        use_amp=use_amp,
+        amp_dtype=amp_dtype,
+    )
+    with open(output_dir / 'test_metrics.json', 'w') as f:
+        payload = {
+            'overall': test_metrics,
+            'per_criteria': test_per,
+            'checkpoint_source': checkpoint_source,
+        }
+        json.dump(payload, f, indent=2)
+
+    return best_metric
+
+
+def apply_trial_suggestions(cfg: DictConfig, trial: optuna.Trial) -> None:
+    search_space = cfg.get("search_space")
+    if not search_space:
+        return
+
+    for param_name, space_cfg in search_space.items():
+        suggestion = sampler_dispatch(trial, param_name, space_cfg)
+
+        if param_name == "train_batch_size":
+            cfg.train_loader.batch_size = int(suggestion)
+        elif param_name == "eval_batch_size":
+            cfg.eval_batch_size = int(suggestion)
+            cfg.val_loader.batch_size = int(suggestion)
+            cfg.test_loader.batch_size = int(suggestion)
+        elif param_name == "learning_rate":
+            cfg.optimizer.lr = float(suggestion)
+        elif param_name == "weight_decay":
+            cfg.optimizer.weight_decay = float(suggestion)
+        elif param_name == "dropout":
+            cfg.model.dropout = float(suggestion)
+        elif param_name == "clip_grad_norm":
+            cfg.training.clip_grad_norm = float(suggestion)
+        elif param_name == "threshold":
+            cfg.training.threshold = float(suggestion)
+        elif param_name == "gradient_accumulation_steps":
+            cfg.training.gradient_accumulation_steps = int(suggestion)
+        # Loss function type selection
+        elif param_name == "loss_function":
+            cfg.loss._target_ = f"model.DynamicLossFactory.create_loss"
+            cfg.loss.loss_type = suggestion
+        # Loss function parameters
+        elif param_name in ["alpha", "gamma", "delta", "bce_weight", "pos_weight"]:
+            if not hasattr(cfg.loss, param_name):
+                setattr(cfg.loss, param_name, suggestion)
+            else:
+                cfg.loss[param_name] = suggestion
+        else:
+            # For unexpected parameters, try to set directly if they exist
+            if hasattr(cfg, param_name):
+                setattr(cfg, param_name, suggestion)
+
+def sampler_dispatch(trial: optuna.Trial, name: str, space_cfg: DictConfig):
+    method = space_cfg.method
+    if method == 'uniform':
+        return trial.suggest_float(name, space_cfg.low, space_cfg.high)
+    if method == 'loguniform':
+        return trial.suggest_float(name, space_cfg.low, space_cfg.high, log=True)
+    if method == 'int':
+        return trial.suggest_int(name, space_cfg.low, space_cfg.high)
+    if method == 'categorical':
+        return trial.suggest_categorical(name, space_cfg.choices)
+    raise ValueError(f"Unsupported sampling method: {method}")
+
+
+def ensure_output_dir(cfg: DictConfig) -> Path:
+    if 'hydra' in cfg and 'run' in cfg.hydra and 'dir' in cfg.hydra.run:
+        return Path(cfg.hydra.run.dir)
+    base_dir = cfg.get('output_dir', 'outputs')
+    run_dir = Path(base_dir) / datetime.now().strftime("%Y%m%d_%H%M%S")
+    return run_dir
+
+
+@hydra.main(version_base=None, config_path='configs/training', config_name='default')
+def main(cfg: DictConfig) -> None:
+    print("Configuration:\n" + OmegaConf.to_yaml(cfg))
+    # allow setting seed on structured config
+    OmegaConf.set_struct(cfg, False)
+    cfg.seed = cfg.get('seed', 42)
+    OmegaConf.set_struct(cfg, True)
+    run_training(cfg)
+
+
+if __name__ == '__main__':
     main()

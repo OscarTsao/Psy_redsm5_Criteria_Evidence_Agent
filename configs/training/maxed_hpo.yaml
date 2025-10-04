@@ -1,0 +1,180 @@
+# Maxed out Optuna HPO configuration for comprehensive hyperparameter search
+# Designed for 2-7 day optimization runs with aggressive pruning and extensive search space
+
+defaults:
+  - default
+  - _self_
+
+optuna:
+  enabled: true
+  n_trials: 500  # Increased from 30 to 500 for comprehensive search
+  direction: maximize
+  timeout: 604800  # 7 days timeout (in seconds)
+  seed: 42
+  study_name: maxed_comprehensive_hpo_v3_fresh
+  storage: sqlite:///optuna_maxed_study_v3.db  # Fresh persistent storage
+  load_if_exists: false  # Start fresh
+  cleanup_trial_dirs: true
+  keep_best_trial_dir: true
+  remove_best_trial_dir_after_export: true
+  artifact_root: outputs/training
+
+  # Advanced pruning configuration for efficiency
+  pruning:
+    enabled: true
+    pruner: MedianPruner
+    n_startup_trials: 20  # No pruning for first 20 trials
+    n_warmup_steps: 5     # Wait 5 epochs before pruning
+    interval_steps: 1     # Check every epoch
+
+# Enhanced search space with more granular exploration
+search_space:
+  # Batch sizes - more options including large batch training
+  train_batch_size:
+    method: categorical
+    choices: [8, 12, 16, 24, 32, 48, 64, 80, 96, 128, 160, 192, 256]
+  eval_batch_size:
+    method: categorical
+    choices: [32, 48, 64, 80, 96, 128, 160, 192, 256, 320]
+
+  # Learning rate - expanded range with more precision
+  learning_rate:
+    method: loguniform
+    low: 5e-07  # Lower bound
+    high: 1e-04  # Higher bound
+
+  # Weight decay - fine-grained search
+  weight_decay:
+    method: loguniform
+    low: 1e-07
+    high: 5e-02
+
+  # Loss function exploration - comprehensive loss function testing
+  loss_function:
+    method: categorical
+    choices: [
+      "bce",              # Binary Cross Entropy
+      "weighted_bce",     # Weighted Binary Cross Entropy
+      "focal",            # Focal Loss
+      "adaptive_focal",   # Adaptive Focal Loss
+      "hybrid_bce_focal",
+      "hybrid_bce_adaptive_focal"
+    ]
+
+  # Loss function parameters - conditional on loss type
+  alpha:  # For focal losses
+    method: uniform
+    low: 0.05
+    high: 0.75
+  gamma:  # For focal losses
+    method: uniform
+    low: 0.5
+    high: 5.0
+  delta:  # For adaptive focal
+    method: uniform
+    low: 0.25
+    high: 3.0
+  bce_weight:  # For hybrid loss
+    method: uniform
+    low: 0.1
+    high: 0.9
+  pos_weight:  # For weighted BCE
+    method: loguniform
+    low: 0.1
+    high: 10.0
+
+  # Model architecture
+  dropout:
+    method: uniform
+    low: 0.0
+    high: 0.5
+
+  # Training dynamics
+  clip_grad_norm:
+    method: uniform
+    low: 0.1
+    high: 5.0
+  threshold:
+    method: uniform
+    low: 0.05
+    high: 0.95
+  gradient_accumulation_steps:
+    method: categorical
+    choices: [1, 2, 3, 4, 6, 8]
+
+  # Optimizer parameters
+  optimizer_type:
+    method: categorical
+    choices: ["adamw", "adam"]
+  beta1:  # For Adam/AdamW
+    method: uniform
+    low: 0.85
+    high: 0.95
+  beta2:  # For Adam/AdamW
+    method: uniform
+    low: 0.99
+    high: 0.999
+  eps:  # For Adam/AdamW
+    method: loguniform
+    low: 1e-10
+    high: 1e-06
+
+  # Scheduler parameters
+  scheduler_type:
+    method: categorical
+    choices: ["plateau", "cosine", "linear", "exponential"]
+  scheduler_patience:  # For ReduceLROnPlateau
+    method: categorical
+    choices: [3, 5, 7, 10, 15]
+  scheduler_factor:  # For ReduceLROnPlateau
+    method: uniform
+    low: 0.1
+    high: 0.8
+  warmup_steps:  # For cosine/linear
+    method: categorical
+    choices: [0, 50, 100, 200, 500]
+
+  # Early stopping
+  early_stopping_patience:
+    method: categorical
+    choices: [5, 7, 10, 15, 20, 25]
+
+  # Advanced training settings
+  use_gradient_checkpointing:
+    method: categorical
+    choices: [true, false]
+  max_steps_per_epoch:
+    method: categorical
+    choices: [null, 500, 1000, 2000]
+
+# Override training settings for more aggressive optimization
+training:
+  num_epochs: 75  # Reduced from 100 to speed up trials
+  early_stopping_patience: 12  # Will be overridden by search space
+  use_compile: true
+  use_amp: true
+  amp_dtype: float16
+  use_grad_checkpointing: true  # Will be overridden by search space
+  max_checkpoints: 1
+  save_checkpoints: true
+  save_best_only: true
+  save_optimizer_state: false
+  save_history: false
+  include_history_in_checkpoint: false
+  save_config_in_checkpoint: true
+
+# Hardware optimizations for long runs
+hardware:
+  dataloader_pin_memory: true
+  enable_tf32: true
+  cudnn_benchmark: true
+  use_bfloat16_if_available: true
+
+# Monitoring and checkpointing for long runs
+monitor_metric: f1
+monitor_mode: max
+max_checkpoints: 3  # Reduced to save disk space during HPO
+
+hydra:
+  sweep:
+    dir: outputs/optimization/maxed_hpo/${now:%Y%m%d_%H%M%S}
