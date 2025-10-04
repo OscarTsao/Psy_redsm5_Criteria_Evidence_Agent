@@ -4,7 +4,78 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a BERT-based pairwise classification system for matching DSM-5 Major Depressive Disorder criteria to Reddit posts from the RedSM5 dataset. The system uses a pairwise approach with input format [CLS]post[SEP]criteria[SEP] to classify each post-criteria pair into 9 DSM-5 criteria (A.1 to A.9) for depression diagnosis.
+This is an advanced BERT-based pairwise classification system for automated identification of DSM-5 Major Depressive Disorder criteria evidence in Reddit posts from the RedSM5 dataset. The system employs a sophisticated pairwise learning approach that processes each (post, criterion) pair independently to determine criterion relevance.
+
+### Core Architecture
+
+**Model**: BERT-based binary classifier with 2-layer MLP head
+- Base Model: BERT-base-uncased (768 hidden dimensions)
+- Classification Head: 768 → 256 → ReLU → Dropout → 256 → 1
+- Input Format: `[CLS]post_text[SEP]criterion_text[SEP]`
+- Output: Single logit per pair (sigmoid for probability)
+
+**Advanced Loss Functions**:
+- Binary Cross-Entropy (BCE)
+- Focal Loss (α, γ parameters for hard example focus)
+- Adaptive Focal Loss (additional δ parameter for dynamic weighting)
+- Hybrid Loss (BCE + Focal/Adaptive Focal combinations)
+- Weighted BCE (class imbalance handling)
+
+**Training Optimizations**:
+- Mixed precision training (AMP) with configurable dtypes
+- Gradient accumulation and clipping
+- Model compilation (PyTorch 2.0+)
+- Early stopping with patience
+- Learning rate scheduling (Plateau, Cosine, Linear, Exponential)
+- Checkpoint management (best + last 5 epochs)
+
+### Research Method
+
+**Problem**: Automated detection of DSM-5 depression criteria evidence in social media text
+**Approach**: Pairwise binary classification treating each (post, criterion) as independent classification task
+**Target**: 9 DSM-5 Major Depressive Disorder criteria (A.1-A.9)
+**Dataset**: RedSM5 groundtruth annotations with post-level symptom labels
+
+## Workflow and Process
+
+### 1. Data Processing Pipeline
+```
+Raw Data → Pairwise Expansion → Tokenization → Training/Validation/Test Splits
+```
+
+**Data Sources**:
+- `Data/groundtruth/redsm5_ground_truth.json`: Post-level annotations with symptom labels
+- `Data/DSM-5/DSM_Criteria_Array_Fixed_Major_Depressive.json`: Criterion text definitions
+
+**Processing Steps**:
+1. Load groundtruth posts with symptom annotations
+2. Expand each post into 9 (post, criterion) pairs
+3. Create binary labels: 1 if post contains evidence for criterion, 0 otherwise
+4. Tokenize pairs as `[CLS]post[SEP]criterion[SEP]` format
+5. Split into train/val/test (configurable ratios)
+
+### 2. Model Training Process
+```
+Data Loading → Model Init → Training Loop → Validation → Checkpointing → Best Model Selection
+```
+
+**Training Features**:
+- Hydra configuration management for reproducible experiments
+- Optuna hyperparameter optimization with pruning
+- Early stopping based on validation F1 score
+- Mixed precision training for memory efficiency
+- Gradient accumulation for large effective batch sizes
+- Learning rate scheduling with multiple strategies
+
+### 3. Evaluation and Analysis
+```
+Model Inference → Pairwise Predictions → Aggregation → Metrics Calculation → Detailed Analysis
+```
+
+**Evaluation Metrics**:
+- Binary classification: Precision, Recall, F1, Accuracy, AUC
+- Per-criterion analysis and overall aggregated performance
+- Confusion matrices and detailed error analysis
 
 ## Essential Commands
 
@@ -13,37 +84,63 @@ This is a BERT-based pairwise classification system for matching DSM-5 Major Dep
 pip install -r requirements.txt
 ```
 
-### Testing Setup
+### Testing and Validation
 ```bash
+# Validate complete setup and data pipeline
 python test_setup.py
-```
-This validates pairwise data loading, model initialization, and forward pass with the cleaned structure.
 
-### Training (Optimized)
+# Test training loop functionality
+python test_training.py
+```
+
+### Training Workflows
+
+#### Basic Training
 ```bash
-# Basic training with optimized defaults
+# Standard training with default configuration (Adaptive Focal Loss)
 python train.py
 
-# Training with hyperparameter overrides
-python train.py training.num_epochs=50 train_loader.batch_size=32
+# Override specific parameters
+python train.py training.num_epochs=50 train_loader.batch_size=32 optimizer.lr=2e-5
 
-# Optuna hyperparameter optimization
+# Train with Binary Cross-Entropy (BCE) loss
+python train.py --config-name=bce
+
+# Train with BCE loss using manual override
+python train.py loss._target_=model.DynamicLossFactory.create_loss +loss.loss_type=bce
+
+# Train with other specific loss functions (requires proper configuration)
+python train.py loss._target_=model.DynamicLossFactory.create_loss +loss.loss_type=focal +loss.alpha=0.25 +loss.gamma=2.0
+```
+
+#### Hyperparameter Optimization
+```bash
+# Quick HPO with Hydra integration (30 trials)
+python train.py training=hpo
+
+# Comprehensive HPO with 500 trials and advanced features
 python run_maxed_hpo.py
 
-# Use optimized configuration from HPO
+# Resume existing HPO study
+python run_maxed_hpo.py optuna.study_name=existing_study_name
+
+# Use best configuration from HPO
 python train.py --config-path=outputs/optimization/TIMESTAMP_study/production_config.yaml
 ```
 
-### Prediction and Evaluation (Enhanced)
+### Prediction and Analysis
 ```bash
-# Predict using best model from a training run
+# Generate predictions for test set
 python predict.py --run outputs/training/20231215_143022
 
-# Predict with specific checkpoint
+# Use specific checkpoint
 python predict.py --run outputs/training/20231215_143022 --checkpoint checkpoint_epoch_15.pt
 
-# Predict different data split
+# Predict on different data split
 python predict.py --run outputs/training/20231215_143022 --split val
+
+# Detailed metrics analysis
+python calculate_metrics.py
 ```
 
 ### Git Workflow for Experiments
@@ -64,39 +161,84 @@ python predict.py --run outputs/training/20231215_143022 --split val
 ./scripts/git_workflow.sh clean-outputs
 ```
 
-## Architecture Overview
+## Detailed Architecture and Implementation
 
 ### Core Components
-- **`model.py`**: BERT model with pairwise classification head (2-layer MLP + dropout)
-- **`data.py`**: Pairwise data loading, preprocessing, and dataset creation utilities
-- **`train.py`**: Training pipeline with early stopping and checkpointing
-- **`predict.py`**: Inference and evaluation with detailed metrics
 
-### Data Flow
-1. Groundtruth data (`redsm5_ground_truth.json`) → efficient JSON loading
-2. DSM-5 criteria mapping from JSON → symptom labels
-3. Expand to (post, criterion) pairs → tokenization as [CLS]post[SEP]criteria[SEP]
-4. BERT embeddings → pairwise binary classification for each (post, criterion) pair
+#### Model Architecture (`model.py`)
+```
+Input: [CLS]post_text[SEP]criterion_text[SEP]
+    ↓
+BERT Encoder (bert-base-uncased, 768 dim)
+    ↓
+Pooler Output ([CLS] token representation)
+    ↓
+Dropout Layer (configurable rate)
+    ↓
+MLP Head: Linear(768→256) → ReLU → Dropout → Linear(256→1)
+    ↓
+Single Logit Output (sigmoid for probability)
+```
 
-### Model Architecture
-- Base: BERT (bert-base-uncased)
-- Classification Head: Linear(768→256) → ReLU → Dropout → Linear(256→1)
-- Loss: Binary Cross-Entropy or Focal Loss (for class imbalance)
-- Output: Sigmoid probability for each (post, criterion) pair
+**Loss Functions Available**:
+1. **BCE**: Standard binary cross-entropy
+2. **Weighted BCE**: Class-balanced with automatic pos_weight calculation
+3. **Focal Loss**: α(1-p_t)^γ * BCE for hard example focus
+4. **Adaptive Focal Loss**: Adds δ parameter for dynamic weighting
+5. **Hybrid Losses**: BCE + Focal/Adaptive Focal combinations
 
-### Key Features
-- Pairwise classification for 9 DSM-5 criteria using [CLS]post[SEP]criteria[SEP] format
-- Advanced loss functions: Focal Loss, Adaptive Focal Loss, and Hybrid Loss
-- Intelligent checkpoint management (keeps only 5 most recent + best model)
-- Early stopping with configurable patience (default: 10 epochs)
-- Learning rate scheduling with ReduceLROnPlateau
-- Comprehensive evaluation metrics (F1, AUC, precision, recall, accuracy)
-- Per-criterion evaluation and aggregation
-- Mixed precision training with gradient accumulation and TF32 optimization
-- Gradient clipping and model compilation support
-- Optuna hyperparameter optimization with best configuration saving
-- Git-based experiment workflow management
-- Hardware optimization for CUDA, cuDNN benchmark, and bfloat16 support
+#### Data Pipeline (`data.py`)
+```python
+# Core data flow
+def create_pairwise_dataset():
+    1. Load posts from groundtruth JSON
+    2. Load DSM-5 criteria definitions
+    3. Create symptom mapping (A.1→DEPRESSED_MOOD, etc.)
+    4. Expand: 1 post → 9 (post, criterion) pairs
+    5. Generate binary labels based on symptom annotations
+    6. Tokenize with format: [CLS]post[SEP]criterion[SEP]
+    7. Return PyTorch Dataset with input_ids, attention_mask, labels
+```
+
+#### Training Pipeline (`train.py`)
+**Features**:
+- Hydra configuration system with automatic timestamped outputs
+- Multi-strategy learning rate scheduling
+- Mixed precision training (fp16/bf16/fp32)
+- Gradient accumulation and clipping
+- Early stopping with validation F1 monitoring
+- Checkpoint management (best + rolling window of 5)
+- Model compilation for PyTorch 2.0+ acceleration
+
+#### Hyperparameter Optimization
+**Basic HPO** (`train.py training=hpo`):
+- 30 trials with median pruning
+- Search space: batch size, learning rate, dropout, loss parameters
+
+**Advanced HPO** (`run_maxed_hpo.py`):
+- 500 trials with hyperband pruning
+- Comprehensive search space: optimizers, schedulers, architectures
+- Advanced artifact management and production config generation
+
+### Technical Implementation Details
+
+#### Memory Optimization
+- Gradient checkpointing for reduced memory usage
+- Mixed precision training with automatic loss scaling
+- Dynamic batch sizing based on available GPU memory
+- Pin memory for faster CPU→GPU transfers
+
+#### Hardware Acceleration
+- TF32 acceleration on Ampere GPUs
+- cuDNN benchmark optimization
+- Multi-GPU support (experimental)
+- Automatic fallback to CPU if CUDA unavailable
+
+#### Reproducibility
+- Fixed random seeds across NumPy, PyTorch, Python
+- Deterministic CUDA operations (when possible)
+- Configuration versioning with Hydra
+- Git commit tracking in output directories
 
 ## Data Structure
 
@@ -109,35 +251,84 @@ Data/
     └── DSM_Criteria_Array_Fixed_Major_Depressive.json  # Criteria definitions
 ```
 
-## Output Files
+## Output Structure and File Organization
 
-### Training Outputs
-- `best_model.pt`: Best model checkpoint based on validation F1 score
-- `checkpoint_epoch_N.pt`: Regular epoch checkpoints (max 5 kept automatically)
-- `history.json`: Per-epoch training/validation metrics and loss
+### Training Outputs (`outputs/training/YYYYMMDD_HHMMSS/`)
+```
+outputs/training/20231215_143022/
+├── best_model.pt                    # Best checkpoint (highest val F1)
+├── checkpoint_epoch_N.pt            # Rolling checkpoint window (max 5)
+├── history.json                     # Per-epoch metrics and loss curves
+├── test_metrics.json                # Final test set evaluation
+├── test_raw_pairs.csv              # Raw pairwise predictions
+├── config.yaml                     # Final resolved configuration
+└── hydra/                          # Hydra configuration artifacts
+    ├── config.yaml
+    ├── overrides.yaml
+    └── hydra.yaml
+```
 
-### Evaluation Outputs
-- `test_raw_pairs.csv`: Raw pairwise predictions with post_id as first column
-- `test_metrics.json`: Overall and per-criterion evaluation metrics
+### Hyperparameter Optimization Outputs
+#### Basic HPO (`outputs/optuna/YYYYMMDD_HHMMSS/`)
+```
+outputs/optuna/20231215_143022/
+├── trial_*/                        # Individual trial outputs
+├── best_trial/                     # Best performing trial
+└── optuna_study.db                 # SQLite study database
+```
 
-### Optimization Outputs
-- `outputs/optimization/TIMESTAMP_study/`: Optuna study results
-  - `best_config.yaml`: Best hyperparameter configuration
-  - `production_config.yaml`: Production-ready configuration
-  - `optimization_results.json`: Complete optimization history
-  - `best_trial_artifacts/`: Best model and training outputs
+#### Advanced HPO (`outputs/optimization/YYYYMMDD_HHMMSS_study/`)
+```
+outputs/optimization/20231215_143022_maxed_comprehensive_hpo_v2/
+├── best_config.yaml                # Best hyperparameters only
+├── production_config.yaml          # Production-ready full config
+├── base_config.yaml               # Original configuration
+├── optimization_results.json       # Complete trial history
+├── all_trials.csv                 # Tabular view of all trials
+└── best_trial_artifacts/          # Best model checkpoints
+    ├── best_model.pt
+    ├── history.json
+    └── test_metrics.json
+```
 
-## DSM-5 Criteria Mapping
+### Prediction Outputs
+- **`test_raw_pairs.csv`**: Raw pairwise predictions with columns:
+  - `post_id`: Original post identifier
+  - `criterion_id`: DSM-5 criterion (A.1-A.9)
+  - `criterion_text`: Full criterion description
+  - `probability`: Model prediction probability [0,1]
+  - `prediction`: Binary prediction (threshold=0.5)
+  - `true_label`: Ground truth label
 
-1. A.1: Depressed mood → `DEPRESSED_MOOD`
-2. A.2: Anhedonia → `ANHEDONIA`
-3. A.3: Appetite change → `APPETITE_CHANGE`
-4. A.4: Sleep issues → `SLEEP_ISSUES`
-5. A.5: Psychomotor changes → `PSYCHOMOTOR`
-6. A.6: Fatigue → `FATIGUE`
-7. A.7: Worthlessness → `WORTHLESSNESS`
-8. A.8: Cognitive issues → `COGNITIVE_ISSUES`
-9. A.9: Suicidal thoughts → `SUICIDAL_THOUGHTS`
+### Metrics and Analysis
+- **`test_metrics.json`**: Comprehensive evaluation metrics:
+  - Overall performance: F1, Precision, Recall, Accuracy, AUC
+  - Per-criterion breakdown
+  - Confusion matrices
+  - Class distribution statistics
+
+## DSM-5 Criteria Mapping and Clinical Context
+
+### Criterion-to-Symptom Mapping
+The system maps 9 DSM-5 Major Depressive Disorder criteria to symptom labels:
+
+| Criterion ID | Clinical Description | Symptom Label | Examples |
+|--------------|---------------------|---------------|----------|
+| A.1 | Depressed mood most of the day | `DEPRESSED_MOOD` | "feeling sad", "down", "empty" |
+| A.2 | Markedly diminished interest/pleasure | `ANHEDONIA` | "nothing is fun anymore", "lost interest" |
+| A.3 | Significant weight/appetite change | `APPETITE_CHANGE` | "can't eat", "eating too much" |
+| A.4 | Insomnia or hypersomnia | `SLEEP_ISSUES` | "can't sleep", "sleeping all day" |
+| A.5 | Psychomotor agitation/retardation | `PSYCHOMOTOR` | "restless", "moving slowly" |
+| A.6 | Fatigue or loss of energy | `FATIGUE` | "exhausted", "no energy" |
+| A.7 | Feelings of worthlessness/guilt | `WORTHLESSNESS` | "I'm useless", "everything is my fault" |
+| A.8 | Concentration/decision difficulties | `COGNITIVE_ISSUES` | "can't focus", "indecisive" |
+| A.9 | Recurrent thoughts of death/suicide | `SUICIDAL_THOUGHTS` | "wish I was dead", "suicidal" |
+
+### Clinical Significance
+- **Pairwise Approach**: Each (post, criterion) pair is evaluated independently
+- **Binary Classification**: Model determines if post contains evidence for specific criterion
+- **Multi-label Nature**: Posts can exhibit evidence for multiple criteria simultaneously
+- **Clinical Relevance**: 5+ criteria indicate Major Depressive Episode (DSM-5 diagnostic criteria)
 
 ## Development Environment
 
@@ -207,3 +398,47 @@ git log --oneline -10
 # Push current branch
 git push origin $(git branch --show-current)
 ```
+
+## Performance Expectations and Results
+
+### Expected Model Performance
+- **Baseline F1 Score**: 0.75-0.80 (with default hyperparameters)
+- **Optimized F1 Score**: 0.82-0.88 (after hyperparameter optimization)
+- **Training Time**: 15-30 minutes per epoch (RTX 3080, batch_size=32)
+- **Memory Usage**: 8-16GB GPU memory (varies by batch size and precision)
+
+### Typical Hyperparameter Optimization Results
+Based on historical runs:
+- **Best Learning Rate**: 1e-5 to 3e-5
+- **Optimal Batch Size**: 32-96 (balance of speed and performance)
+- **Best Loss Function**: Adaptive Focal Loss or Hybrid BCE+Adaptive Focal
+- **Optimal Dropout**: 0.1-0.3
+- **Weight Decay**: 1e-3 to 1e-2
+
+### Hardware Requirements
+- **Minimum**: 8GB GPU memory, 16GB RAM
+- **Recommended**: 16GB+ GPU memory, 32GB+ RAM
+- **Optimal**: RTX 4080/4090 or A100, 64GB+ RAM
+
+## Usage Guidelines
+
+### Quick Start Workflow
+1. **Setup**: `pip install -r requirements.txt`
+2. **Validate**: `python test_setup.py`
+3. **Train**: `python train.py`
+4. **Predict**: `python predict.py --run outputs/training/TIMESTAMP`
+5. **Analyze**: `python calculate_metrics.py`
+
+### Advanced Usage
+1. **Hyperparameter Optimization**: `python run_maxed_hpo.py`
+2. **Production Training**: Use best config from HPO
+3. **Detailed Analysis**: Examine per-criterion performance
+4. **Experiment Tracking**: Use Git workflow scripts
+
+### Troubleshooting
+- **CUDA OOM**: Reduce batch size or enable gradient checkpointing
+- **Slow Training**: Check data loading parallelization (`num_workers`)
+- **Poor Performance**: Try different loss functions or run HPO
+- **Reproducibility Issues**: Verify seed settings and deterministic flags
+- **BCE Training Fails**: Use `--config-name=bce` or manual override with `loss._target_=model.DynamicLossFactory.create_loss +loss.loss_type=bce`
+- **Loss Type Override Error**: Use `+loss.loss_type=X` (with +) when changing loss functions manually

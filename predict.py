@@ -272,7 +272,9 @@ def main() -> None:
 
     tokenizer_name = training_cfg.model.model_name
 
+    # Rebuild splits with the same dataset paths the run was trained on
     split_datasets = make_pairwise_datasets(
+        groundtruth_path=training_cfg.groundtruth_path,
         criteria_path=criteria_path,
         tokenizer_name=tokenizer_name,
         seed=seed,

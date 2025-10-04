@@ -189,7 +189,7 @@ def make_pairwise_datasets(groundtruth_path: str = None,
                            seed: int = 42,
                            max_length: int = 512):
     """Create pairwise datasets. Now uses groundtruth data by default."""
-    # Use groundtruth data as the primary method
+    # Legacy arguments stay for backward compatibility; groundtruth JSON is now canonical
     if groundtruth_path is None:
         groundtruth_path = "Data/groundtruth/redsm5_ground_truth.json"
     if criteria_path is None:
@@ -204,30 +204,3 @@ def make_pairwise_datasets(groundtruth_path: str = None,
         seed=seed,
         max_length=max_length
     )
-
-    # Shuffle by post to avoid leakage across splits
-    unique_posts = post_df["post_id"].values
-    rng.shuffle(unique_posts)
-    n = len(unique_posts)
-    n_train = int(n * train_frac)
-    n_val = int(n * val_frac)
-    train_ids = set(unique_posts[:n_train])
-    val_ids = set(unique_posts[n_train:n_train + n_val])
-    test_ids = set(unique_posts[n_train + n_val:])
-
-    def to_ds(sub_df: pd.DataFrame):
-        return CriteriaPairDataset(
-            posts=sub_df["text"].tolist(),
-            criteria=sub_df["criteria_text"].tolist(),
-            labels=sub_df["y"].tolist(),
-            criterion_indices=sub_df["criteria_idx"].tolist(),
-            post_ids=sub_df["post_id"].tolist(),
-            tokenizer_name=tokenizer_name,
-            max_length=max_length,
-        )
-
-    train_df = pairs_df[pairs_df["post_id"].isin(train_ids)].reset_index(drop=True)
-    val_df = pairs_df[pairs_df["post_id"].isin(val_ids)].reset_index(drop=True)
-    test_df = pairs_df[pairs_df["post_id"].isin(test_ids)].reset_index(drop=True)
-
-    return to_ds(train_df), to_ds(val_df), to_ds(test_df), criteria_map

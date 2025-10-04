@@ -41,47 +41,6 @@ def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray, y_prob: np.ndarray) 
     }
 
 
-def evaluate(model, loader, device, threshold: float = 0.5, use_amp: bool = True):
-    model.eval()
-    all_y, all_pred, all_prob, all_cidx = [], [], [], []
-    with torch.no_grad():
-        for batch in tqdm(loader, desc='Eval'):
-            input_ids = batch['input_ids'].to(device)
-            attention_mask = batch['attention_mask'].to(device)
-            labels = batch['labels'].to(device)
-            cidx = batch['criterion_idx'].cpu().numpy()
-
-            if use_amp:
-                with autocast_context(use_amp, torch.float16):
-                    logits = model(input_ids, attention_mask)
-            else:
-                logits = model(input_ids, attention_mask)
-
-            probs = torch.sigmoid(logits)
-            preds = (probs > threshold).float()
-
-            all_y.append(labels.cpu().numpy())
-            all_pred.append(preds.cpu().numpy())
-            all_prob.append(probs.cpu().numpy())
-            all_cidx.append(cidx)
-
-    y = np.concatenate(all_y)
-    y_hat = np.concatenate(all_pred)
-    y_prob = np.concatenate(all_prob)
-    cidx = np.concatenate(all_cidx)
-
-    overall = compute_metrics(y, y_hat, y_prob)
-
-    # Per-criterion metrics
-    per_criteria = []
-    for i in range(9):
-        m = compute_metrics(y[cidx == i], y_hat[cidx == i], y_prob[cidx == i])
-        m['criteria_idx'] = i
-        per_criteria.append(m)
-
-    return overall, per_criteria
-
-
 def seed_everything(seed: int) -> None:
     import random
     random.seed(seed)
@@ -180,6 +139,7 @@ def train_one_epoch(
     optimizer.zero_grad()
     for step, batch in enumerate(tqdm(train_loader, desc='Train', leave=False)):
         loss, _ = forward_loss(model, batch, criterion, device, use_amp, amp_dtype)
+        # Average loss across accumulation steps so gradients match full batch size
         loss = loss / gradient_accumulation_steps
 
         if scaler and use_amp:
@@ -261,6 +221,7 @@ def evaluate_model(model, loader, device, threshold: float = 0.5, use_amp: bool 
             m = compute_metrics(y[subset], y_hat[subset], y_prob[subset])
         else:
             m = {k: float('nan') for k in ['precision', 'recall', 'f1', 'auc', 'accuracy']}
+        # Keep track of criteria index so downstream reporting can join on metadata
         m['criteria_idx'] = i
         per_criteria.append(m)
 
@@ -358,17 +319,23 @@ def run_training(cfg: DictConfig) -> float:
     output_dir = ensure_output_dir(cfg)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save standalone config.yaml for reproducibility
-    config_path = output_dir / 'config.yaml'
-    with open(config_path, 'w') as f:
-        yaml.dump(OmegaConf.to_container(cfg, resolve=True), f, default_flow_style=False, sort_keys=False)
-    print(f"💾 Configuration saved to: {config_path}")
+    # Save standalone config.yaml for reproducibility (skip if Hydra already saved it)
+    hydra_config_path = output_dir / '.hydra' / 'config.yaml'
+    if not hydra_config_path.exists():
+        config_path = output_dir / 'config.yaml'
+        with open(config_path, 'w') as f:
+            yaml.dump(OmegaConf.to_container(cfg, resolve=True), f, default_flow_style=False, sort_keys=False)
+        print(f"💾 Configuration saved to: {config_path}")
+    else:
+        print(f"💾 Configuration already saved by Hydra to: {hydra_config_path}")
 
     # Store output directory in trial for artifact copying
     if trial is not None:
         trial.set_user_attr('output_dir', str(output_dir))
 
+    # Respect the configured data locations so sweeps can swap datasets cleanly
     train_ds, val_ds, test_ds, _ = make_pairwise_datasets(
+        groundtruth_path=cfg.groundtruth_path,
         criteria_path=cfg.criteria_path,
         tokenizer_name=cfg.model.model_name,
         seed=seed,
@@ -397,12 +364,14 @@ def run_training(cfg: DictConfig) -> float:
     amp_device_type = 'cuda' if torch.cuda.is_available() else 'cpu'
     use_amp = bool(cfg.training.use_amp and amp_device_type == 'cuda')
 
+    # GradScaler automatically disables scaling on CPU while keeping call-sites uniform
     scaler = GradScaler(amp_device_type, enabled=use_amp)
 
     best_metric = -float('inf')
     history = []
     patience_counter = 0
     early_stopping_patience = cfg.training.get('early_stopping_patience', 10)
+    best_checkpoint_path = output_dir / 'best_model.pt'
 
     amp_dtype = getattr(torch, cfg.training.amp_dtype) if isinstance(cfg.training.amp_dtype, str) else cfg.training.amp_dtype
     if amp_device_type != 'cuda':
@@ -455,8 +424,8 @@ def run_training(cfg: DictConfig) -> float:
         metrics_payload = {
             'train_loss': train_loss,
             'val_overall': val_metrics,
-                'val_per_criteria': val_per,
-            }
+            'val_per_criteria': val_per,
+        }
         max_checkpoints = cfg.training.get('max_checkpoints', 5)
         save_history_and_checkpoint(output_dir, model, optimizer, cfg, history, metrics_payload, epoch, best=is_best, max_checkpoints=max_checkpoints)
 
@@ -480,6 +449,25 @@ def run_training(cfg: DictConfig) -> float:
             print(f"Early stopping triggered after {epoch} epochs (patience: {early_stopping_patience})")
             break
 
+    checkpoint_source = 'final_model'
+    if best_checkpoint_path.exists():
+        try:
+            checkpoint = torch.load(best_checkpoint_path, map_location=device)
+            state_dict = checkpoint.get('model_state_dict', checkpoint)
+            load_result = model.load_state_dict(state_dict)
+            missing_keys = getattr(load_result, 'missing_keys', [])
+            unexpected_keys = getattr(load_result, 'unexpected_keys', [])
+            if missing_keys or unexpected_keys:
+                print(
+                    "⚠️  Loaded best checkpoint with mismatched keys. "
+                    f"Missing: {missing_keys} Unexpected: {unexpected_keys}. Evaluating anyway."
+                )
+            checkpoint_source = 'best_model.pt'
+        except Exception as exc:
+            print(f"⚠️  Could not load best_model.pt for evaluation ({exc}); using final model weights instead.")
+    else:
+        print("⚠️  best_model.pt not found; evaluating final epoch weights.")
+
     test_metrics, test_per = evaluate_model(
         model,
         test_loader,
@@ -489,7 +477,12 @@ def run_training(cfg: DictConfig) -> float:
         amp_dtype=amp_dtype,
     )
     with open(output_dir / 'test_metrics.json', 'w') as f:
-        json.dump({'overall': test_metrics, 'per_criteria': test_per}, f, indent=2)
+        payload = {
+            'overall': test_metrics,
+            'per_criteria': test_per,
+            'checkpoint_source': checkpoint_source,
+        }
+        json.dump(payload, f, indent=2)
 
     return best_metric
 

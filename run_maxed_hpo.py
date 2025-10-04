@@ -23,7 +23,13 @@ from omegaconf import DictConfig, OmegaConf
 from train import run_training
 
 
-def save_best_configuration(study: optuna.Study, base_cfg: DictConfig, output_dir: Path) -> None:
+def save_best_configuration(
+    study: optuna.Study,
+    base_cfg: DictConfig,
+    output_dir: Path,
+    *,
+    best_metrics: Optional[Dict[str, Any]] = None,
+) -> None:
     """Save the best trial configuration for production use."""
     if len([t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]) == 0:
         print("⚠️  No completed trials found. Cannot save best configuration.")
@@ -76,6 +82,9 @@ def save_best_configuration(study: optuna.Study, base_cfg: DictConfig, output_di
         }
     }
 
+    if best_metrics is not None:
+        optimization_results['best_trial']['test_metrics'] = best_metrics
+
     results_path = output_dir / "optimization_results.json"
     with open(results_path, 'w') as f:
         json.dump(optimization_results, f, indent=2)
@@ -85,23 +94,39 @@ def save_best_configuration(study: optuna.Study, base_cfg: DictConfig, output_di
     print(f"📊 Optimization results saved to: {results_path}")
 
 
-def copy_best_trial_artifacts(study: optuna.Study, output_dir: Path) -> None:
+def copy_best_trial_artifacts(study: optuna.Study, output_dir: Path) -> Optional[Dict[str, Any]]:
     """Copy artifacts from the best trial to the optimization output directory."""
-    if len([t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]) == 0:
+    completed_trials = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
+    if len(completed_trials) == 0:
         print("⚠️  No completed trials found. Cannot copy artifacts.")
-        return
+        return None
 
     best_trial = study.best_trial
-    best_output_dir = best_trial.user_attrs.get('output_dir')
+    print(f"🏆 Best trial: #{best_trial.number} with value {best_trial.value:.4f}")
 
-    if not best_output_dir or not Path(best_output_dir).exists():
-        print(f"⚠️  Best trial output directory not found: {best_output_dir}")
-        return
+    best_output_dir = best_trial.user_attrs.get('output_dir')
+    print(f"📁 Looking for artifacts in: {best_output_dir}")
+
+    if not best_output_dir:
+        print(f"❌ ERROR: Best trial #{best_trial.number} has no 'output_dir' user attribute!")
+        print(f"   Available user_attrs: {list(best_trial.user_attrs.keys())}")
+        return None
+
+    source_dir = Path(best_output_dir)
+    if not source_dir.exists():
+        print(f"❌ ERROR: Best trial output directory does not exist: {source_dir}")
+        print(f"   This likely means the directory was cleaned up prematurely.")
+        return None
+
+    # Verify best_model.pt exists before copying
+    best_model_path = source_dir / "best_model.pt"
+    if not best_model_path.exists():
+        print(f"❌ ERROR: best_model.pt not found in {source_dir}")
+        print(f"   Directory contents: {list(source_dir.iterdir()) if source_dir.exists() else 'N/A'}")
+        return None
 
     best_artifacts_dir = output_dir / "best_trial_artifacts"
     best_artifacts_dir.mkdir(exist_ok=True)
-
-    source_dir = Path(best_output_dir)
 
     # Copy important files
     files_to_copy = [
@@ -111,14 +136,44 @@ def copy_best_trial_artifacts(study: optuna.Study, output_dir: Path) -> None:
         "config.yaml"
     ]
 
+    best_metrics: Optional[Dict[str, Any]] = None
+    copied_files = []
+    missing_files = []
+
     for filename in files_to_copy:
         source_file = source_dir / filename
         if source_file.exists():
             target_file = best_artifacts_dir / filename
             shutil.copy2(source_file, target_file)
-            print(f"📁 Copied {filename} to artifacts directory")
+            copied_files.append(filename)
+            print(f"✅ Copied {filename} to artifacts directory")
+            if filename == "test_metrics.json" and best_metrics is None:
+                try:
+                    with open(source_file, "r", encoding="utf-8") as metrics_file:
+                        best_metrics = json.load(metrics_file)
+                except json.JSONDecodeError as exc:
+                    print(f"⚠️  Could not parse test metrics at {source_file}: {exc}")
+        else:
+            missing_files.append(filename)
+            print(f"⚠️  File not found: {filename}")
 
-    print(f"✅ Best trial artifacts copied to: {best_artifacts_dir}")
+    print(f"\n📦 Artifact copy summary:")
+    print(f"   ✅ Copied: {len(copied_files)}/{len(files_to_copy)} files")
+    print(f"   📁 Target directory: {best_artifacts_dir}")
+    if missing_files:
+        print(f"   ⚠️  Missing files: {', '.join(missing_files)}")
+
+    if best_metrics and isinstance(best_metrics, dict):
+        overall = best_metrics.get('overall', {})
+        if overall:
+            summary = (
+                f"f1={overall.get('f1', float('nan')):.4f} "
+                f"precision={overall.get('precision', float('nan')):.4f} "
+                f"recall={overall.get('recall', float('nan')):.4f}"
+            )
+            print(f"📊 Best trial test metrics: {summary}")
+
+    return best_metrics
 
 
 def export_trials_dataframe(study: optuna.Study, output_dir: Path) -> None:
@@ -320,6 +375,23 @@ def run_training_with_trial(cfg: DictConfig, trial: optuna.Trial) -> float:
     # Apply hyperparameters to config
     trial_cfg = apply_hyperparameters(cfg, params)
 
+    # Create trial-specific output directory BEFORE training
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    trial_output_dir = Path(f"outputs/training/trial_{trial.number}_{timestamp}")
+    trial_output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Override Hydra output directory for this trial
+    OmegaConf.set_struct(trial_cfg, False)
+    if 'hydra' not in trial_cfg:
+        trial_cfg.hydra = {}
+    if 'run' not in trial_cfg.hydra:
+        trial_cfg.hydra.run = {}
+    trial_cfg.hydra.run.dir = str(trial_output_dir)
+    OmegaConf.set_struct(trial_cfg, True)
+
+    # Save trial output directory BEFORE training starts
+    trial.set_user_attr('output_dir', str(trial_output_dir))
+
     # Inject trial object for pruning
     object.__setattr__(trial_cfg, '_trial_obj', trial)
 
@@ -336,10 +408,7 @@ def run_training_with_trial(cfg: DictConfig, trial: optuna.Trial) -> float:
     object.__setattr__(trial_cfg, 'get', custom_get)
 
     try:
-        # Store trial output directory for artifact collection
         result = run_training(trial_cfg)
-        if hasattr(trial_cfg, 'output_dir'):
-            trial.set_user_attr('output_dir', str(trial_cfg.output_dir))
         return result
     finally:
         # Cleanup
@@ -489,8 +558,8 @@ def main(cfg: DictConfig) -> None:
 
     # Save results
     try:
-        save_best_configuration(study, cfg, optimization_dir)
-        copy_best_trial_artifacts(study, optimization_dir)
+        best_metrics = copy_best_trial_artifacts(study, optimization_dir)
+        save_best_configuration(study, cfg, optimization_dir, best_metrics=best_metrics)
         export_trials_dataframe(study, optimization_dir)
         if cleanup_trial_dirs and remove_best_after_export and best_trial_dir is not None:
             cleanup_trial_output(str(best_trial_dir), artifact_root, f"post-export cleanup for trial {best_trial_number}", force=True)

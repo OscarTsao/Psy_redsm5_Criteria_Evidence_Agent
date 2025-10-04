@@ -1,22 +1,23 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-Core training logic lives in `train.py`, with supporting modules in `model.py` (architecture and hybrid loss), `data.py` (pairwise dataset prep), `predict.py`, and `calculate_metrics.py`. Hydra configs sit under `configs/`, anchored by `config.yaml` and training overrides in `configs/training/`. Expected inputs reside in `Data/redsm5/` and `Data/DSM-5/`, while `outputs/<timestamp>/` captures run artefacts, checkpoints, and Hydra snapshots. Utility scripts live in `scripts/`, and lightweight validation scripts are `test_setup.py` and `test_training.py`.
+Training flows through `train.py`, which wires together the architecture and hybrid loss in `model.py`, data prep helpers in `data.py`, and Hydra configuration under `configs/`. Default settings live in `configs/config.yaml`, while overrides sit in `configs/training/`. Input artefacts must be staged in `Data/redsm5/` and `Data/DSM-5/`. Outputs land in `outputs/<timestamp>/`, including checkpoints (`best_model.pt`), Hydra snapshots, and metrics. CLI utilities reside in `scripts/`, and quick validation helpers are `test_setup.py` and `test_training.py`.
 
 ## Build, Test, and Development Commands
-- `pip install -r requirements.txt` — install Python dependencies.
-- `python train.py` — launch default Hydra training; override with flags such as `python train.py training=hpo optuna.n_trials=50`.
-- `python predict.py --checkpoint_path outputs/<run>/best_model.pt --output_dir outputs/<run>/predictions` — export inference results.
-- `python calculate_metrics.py` — recompute aggregate metrics for a finished run.
+- `pip install -r requirements.txt` — install pinned training dependencies.
+- `python train.py` — launch the default Hydra job; append overrides such as `training=hpo optuna.n_trials=50` for sweeps.
+- `python predict.py --checkpoint_path outputs/<run>/best_model.pt --output_dir outputs/<run>/predictions` — export predictions from a saved checkpoint.
+- `python calculate_metrics.py` — recompute aggregate scores for a completed run.
+- `scripts/git_workflow.sh clean-outputs` — prune older run directories, keeping the five newest.
 
 ## Coding Style & Naming Conventions
-Follow standard PEP 8: four-space indentation, descriptive snake_case identifiers, and module-level constants in CAPS. Maintain type hints (see `train.py`) and prefer single-quoted strings for consistency. Keep Hydra config names lowercase with underscores (`training/default.yaml`), and align experiment branches with the `scripts/git_workflow.sh` pattern `experiment/<focus-area>`.
+Follow PEP 8 with four-space indentation, snake_case identifiers, and module constants in CAPS. Prefer single-quoted strings for consistency. Add type hints when touching training or data paths. Hydra config filenames stay lowercase with underscores (e.g., `training/default.yaml`). Name experiment branches `experiment/<focus-area>` to match `scripts/git_workflow.sh`.
 
 ## Testing Guidelines
-Use targeted smoke tests before proposing changes. `python test_setup.py` checks data availability and a minimal forward pass (requires the CSV/JSON files in `Data/`). `python test_training.py` validates config loading, hardware toggles, and checkpoint cleanup. Investigate any ✗ output and keep temporary artefacts out of version control. Expand coverage with focused PyTest cases when modifying training or loss logic.
+Run `python test_setup.py` before committing to confirm data access and a minimal forward pass (requires the CSV/JSON inputs). Use `python test_training.py` to verify config loading, hardware flags, and checkpoint cleanup. Investigate any ✗ output and avoid committing artefacts under `outputs/`. Add focused PyTest coverage when introducing new loss logic or data transforms.
 
 ## Commit & Pull Request Guidelines
-Existing history uses concise, imperative summaries (e.g., "Fix HPO issues and enable fresh study restart"). Mirror that format, keep the first line under ~72 characters, and add context in the body if needed. The helper `scripts/git_workflow.sh commit "Message"` embeds timestamp metadata; update totals before invoking it. Pull requests should link the relevant issue, list Hydra overrides or Optuna settings, summarise validation metrics, note data prerequisites, and point reviewers to the run directory under `outputs/`.
+Use concise, imperative commit messages under ~72 characters (e.g., "Enable fresh HPO restart"). When using the helper script, call `scripts/git_workflow.sh commit "Message"` after updating totals. Pull requests should link the issue, list Hydra overrides or Optuna settings, summarize key metrics, note data prerequisites, and point reviewers to the relevant `outputs/<timestamp>/` directory.
 
-## Experiment Tracking & Data Notes
-Do not commit raw datasets; store them under `Data/` locally to satisfy path assumptions in configs. After each experiment, capture the resolved config from `outputs/<timestamp>/hydra/` and surface per-criterion metrics when reporting results. Rotate old artefacts with `scripts/git_workflow.sh clean-outputs` to keep only the five newest runs.
+## Experiment Tracking Notes
+Never version raw data; keep it only under `Data/`. Record resolved configs from `outputs/<timestamp>/hydra/` and capture per-criterion metrics when sharing results. Archive old runs instead of deleting them if you need reproducibility data.
